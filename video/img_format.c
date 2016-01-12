@@ -22,6 +22,8 @@
 #include <libavutil/pixfmt.h>
 #include <libavutil/pixdesc.h>
 
+#include "config.h"
+
 #include "video/img_format.h"
 #include "video/mp_image.h"
 #include "video/fmt-conversion.h"
@@ -35,7 +37,6 @@ static const struct mp_imgfmt_entry mp_imgfmt_list[] = {
     // not in ffmpeg
     {"vdpau_output",    IMGFMT_VDPAU_OUTPUT},
     // FFmpeg names have an annoying "_vld" suffix
-    {"vda",             IMGFMT_VDA},
     {"videotoolbox",    IMGFMT_VIDEOTOOLBOX},
     {"vaapi",           IMGFMT_VAAPI},
     // names below this are not preferred over the FFmpeg names
@@ -142,7 +143,6 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
         .avformat = fmt,
         .chroma_xs = pd->log2_chroma_w,
         .chroma_ys = pd->log2_chroma_h,
-        .component_bits = pd->comp[0].depth_minus1 + 1,
     };
 
     int planedepth[4] = {0};
@@ -150,12 +150,21 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
     bool need_endian = false; // single component is spread over >1 bytes
     for (int c = 0; c < pd->nb_components; c++) {
         AVComponentDescriptor d = pd->comp[c];
+#if HAVE_AV_NEW_PIXDESC
+        int depth = d.depth;
+        int step = d.step;
+#else
+        int depth = d.depth_minus1 + 1;
+        int step = d.step_minus1 + 1;
+#endif
         // multiple components per plane -> Y is definitive, ignore chroma
         if (!desc.bpp[d.plane])
-            desc.bpp[d.plane] = (d.step_minus1 + 1) * el_size;
-        planedepth[d.plane] += d.depth_minus1 + 1;
-        need_endian |= (d.depth_minus1 + 1 + d.shift) > 8;
-        if (d.depth_minus1 + 1 != desc.component_bits)
+            desc.bpp[d.plane] = step * el_size;
+        planedepth[d.plane] += depth;
+        need_endian |= (depth + d.shift) > 8;
+        if (c == 0)
+            desc.component_bits = depth;
+        if (depth != desc.component_bits)
             desc.component_bits = 0;
     }
 
@@ -165,6 +174,7 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
     }
 
     desc.plane_bits = planedepth[0];
+    desc.component_full_bits = desc.component_bits;
 
     // Check whether any components overlap other components (per plane).
     // We're cheating/simplifying here: we assume that this happens if a shift
@@ -222,15 +232,23 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
     if (pd->flags & (AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_PSEUDOPAL))
         desc.flags |= MP_IMGFLAG_PAL;
 
-    if ((desc.flags & MP_IMGFLAG_YUV) && (desc.flags & MP_IMGFLAG_BYTE_ALIGNED))
+    if ((desc.flags & (MP_IMGFLAG_YUV | MP_IMGFLAG_RGB))
+        && (desc.flags & MP_IMGFLAG_BYTE_ALIGNED)
+        && !(pd->flags & AV_PIX_FMT_FLAG_PAL))
     {
         bool same_depth = true;
         for (int p = 0; p < desc.num_planes; p++) {
             same_depth &= planedepth[p] == planedepth[0] &&
                           desc.bpp[p] == desc.bpp[0];
         }
-        if (same_depth && pd->nb_components == desc.num_planes)
-            desc.flags |= MP_IMGFLAG_YUV_P;
+        if (same_depth && pd->nb_components == desc.num_planes) {
+            desc.component_full_bits = (desc.component_bits + 7) / 8 * 8;
+            if (desc.flags & MP_IMGFLAG_YUV) {
+                desc.flags |= MP_IMGFLAG_YUV_P;
+            } else {
+                desc.flags |= MP_IMGFLAG_RGB_P;
+            }
+        }
     }
 
     for (int p = 0; p < desc.num_planes; p++) {
@@ -246,7 +264,9 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
 
     if (pd->flags & AV_PIX_FMT_FLAG_HWACCEL) {
         desc.flags |= MP_IMGFLAG_HWACCEL;
-        desc.plane_bits = 8; // usually restricted to 8 bit; may change
+        desc.component_bits = 8; // usually restricted to 8 bit; may change
+        desc.component_full_bits = desc.component_bits;
+        desc.plane_bits = desc.component_bits;
     }
 
     if (desc.chroma_xs || desc.chroma_ys)

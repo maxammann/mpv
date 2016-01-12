@@ -46,14 +46,10 @@ extern const vf_info_t vf_info_noformat;
 extern const vf_info_t vf_info_flip;
 extern const vf_info_t vf_info_rotate;
 extern const vf_info_t vf_info_mirror;
-extern const vf_info_t vf_info_noise;
 extern const vf_info_t vf_info_eq;
 extern const vf_info_t vf_info_gradfun;
-extern const vf_info_t vf_info_unsharp;
-extern const vf_info_t vf_info_hqdn3d;
 extern const vf_info_t vf_info_dsize;
 extern const vf_info_t vf_info_pullup;
-extern const vf_info_t vf_info_delogo;
 extern const vf_info_t vf_info_sub;
 extern const vf_info_t vf_info_yadif;
 extern const vf_info_t vf_info_stereo3d;
@@ -79,19 +75,15 @@ static const vf_info_t *const filter_list[] = {
     &vf_info_mirror,
     &vf_info_lavfi,
     &vf_info_rotate,
-    &vf_info_noise,
     &vf_info_gradfun,
-    &vf_info_unsharp,
-    &vf_info_hqdn3d,
     &vf_info_pullup,
-    &vf_info_delogo,
     &vf_info_yadif,
+    &vf_info_stereo3d,
 #endif
 
     &vf_info_eq,
     &vf_info_dsize,
     &vf_info_sub,
-    &vf_info_stereo3d,
     &vf_info_buffer,
 #if HAVE_DLOPEN
     &vf_info_dlopen,
@@ -277,12 +269,15 @@ static vf_instance_t *vf_open_filter(struct vf_chain *c, const char *name,
     for (i = 0; args && args[2 * i]; i++)
         l += 1 + strlen(args[2 * i]) + 1 + strlen(args[2 * i + 1]);
     l += strlen(name);
-    char str[l + 1];
+    char *str = malloc(l + 1);
+    if (!str)
+        return NULL;
     char *p = str;
     p += sprintf(str, "%s", name);
     for (i = 0; args && args[2 * i]; i++)
         p += sprintf(p, " %s=%s", args[2 * i], args[2 * i + 1]);
     MP_INFO(c, "Opening video filter: [%s]\n", str);
+    free(str);
     return vf_open(c, name, args);
 }
 

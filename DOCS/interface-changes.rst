@@ -19,7 +19,32 @@ Interface changes
 
 ::
 
- --- mpv 0.10.0 will be released ---
+ --- mpv 0.14.0 ---
+    - vo_opengl interpolation now requires --video-sync=display-... to be set
+    - change some vo_opengl defaults (including changing tscale)
+    - add "vsync-ratio", "estimated-display-fps" properties
+    - add --rebase-start-time option
+      This is a breaking change to start time handling. Instead of making start
+      time handling an aspect of different options and properties (like
+      "time-pos" vs. "playback-time"), make it dependent on the new option. For
+      compatibility, the "time-start" property now always returns 0, so code
+      which attempted to handle rebasing manually will not break.
+ --- mpv 0.13.0 ---
+    - remove VO opengl-cb frame queue suboptions (no replacement)
+ --- mpv 0.12.0 ---
+    - remove --use-text-osd (useless; fontconfig isn't a requirement anymore,
+      and text rendering is also lazily initialized)
+    - some time properties (at least "playback-time", "time-pos",
+      "time-remaining", "playtime-remaining") now are unavailable if the time
+      is unknown, instead of just assuming that the internal playback position
+      is 0
+    - add --audio-fallback-to-null option
+    - replace vf_format outputlevels suboption with "video-output-levels" global
+      property/option; also remove "colormatrix-output-range" property
+    - vo_opengl: remove sharpen3/sharpen5 scale filters, add sharpen sub-option
+ --- mpv 0.11.0 ---
+    - add "af-metadata" property
+ --- mpv 0.10.0 ---
     - add --video-aspect-method option
     - add --playlist-pos option
     - add --video-sync* options
@@ -85,4 +110,4 @@ Interface changes
     - add --screenshot-high-bit-depth
     - add --screenshot-jpeg-source-chroma
     - default action for "rescan_external_files" command changes
- --- mpv 0.9.0 is released ---
+ --- mpv 0.9.0 ---

@@ -1,3 +1,341 @@
+Release 0.14.0
+==============
+
+Build System Changes
+--------------------
+
+- build: install scalable svg icon as well
+- vo_opengl: require --enable-gpl3 for nnedi
+- win32: enable internal pthreads wrapper by default
+
+
+Features
+--------
+
+New
+~~~
+
+- vo_opengl: add experimental dxinterop backend (renders with OpenGL, displays through Direct3D; broken with Intel drivers)
+- vo_opengl: add initial ANGLE support
+- windows: implement icc-profile-auto
+- windows: support taskbar button progress indicator (issue #2399)
+
+Removed
+~~~~~~~
+
+- Windows XP support
+- demux: remove old subtitle parser (FFmpeg users are unaffected; Libav loses support for some minor formats)
+- demux_libass: remove this demuxer (libavformat takes its place)
+- stream: drop old Linux PVR support
+
+
+Options and Commands
+--------------------
+
+Added
+~~~~~
+
+- command, vo: add estimated-display-fps property
+- command: add vsync-ratio property
+- command: export some per-video-frame information (issue #2444)
+- vo_opengl: make LOOKUP_TEXTURE_SIZE configurable
+- windows: add option to set VO MMCSS profile
+
+
+Changed
+~~~~~~~
+
+- --sub-fix-timing now applies to ASS subtitles as well
+- command: rename vo-missed-frame-count property to vo-delayed-frame-count
+- input.conf: add default bindings for changing window scale (issue #2500)
+- videotoolbox: make decoder format customizable
+- vo_opengl: disable interpolation without display-sync
+- vo_opengl: make tscale=mitchell:tscale-clamp the default
+- vo_rpi: add an option to disable OSD
+
+
+Fixes and Minor Enhancements
+----------------------------
+
+- af_lavrresample: clamp float output to range
+- ao: disambiguate default device list entries
+- ao_alsa: filter audio device list
+- ao_alsa: list bidirectional devices too
+- ao_openal: accommodate more sample formats (issue #2494)
+- ao_openal: fix virtual speaker positioning
+- ao_wasapi: only report per-app volume in shared mode
+- ao_wasapi: work around DTS passthrough failure
+- build: make vaapi-wayland depend on gl-wayland (issue #2476)
+- demux: fix seeking in .ts
+- demux_lavf: mark ASS tracks as always UTF-8
+- demux_mkv: fix incremental indexing with single-keyframe files (issue #2498)
+- drm: fix setting up connectors
+- dxva2: reject 10 bit HEVC (issue #2516)
+- player: replace mistimed-frame-count with vsync-ratio on status line
+- sd_ass: fix secondary subtitle mode
+- various display-sync improvements
+- vo_opengl: enable NNEDI3 prescaler on OpenGL ES 3.0
+- vo_opengl: enable colormatrix even for RGB input
+- vo_opengl: fix backend autoprobing, attempt to improve GLX vs. EGL backend detection
+- vo_opengl: fix backend=x11 on Intel
+- vo_opengl: fix issues with some obscure pixel formats (e.g. rgb555)
+- vo_opengl: fix precision loss of fruit dithering matrix
+- vo_opengl: force dumb mode if RG textures are not available
+- vo_opengl: improve boundary check for polar filters
+- vo_opengl: various GLES compatibility improvements
+- vo_opengl: win32: test for exclusive mode
+- vo_opengl_cb: do not block on flipping when redrawing
+- vo_rpi: set aspect ratio
+- win32: fix console output with raw stdio functions
+- windows: try to avoid detection as exclusive fullscreen window (issue #2177)
+- x11: request bypassing compositor (issue #2502)
+
+
+This listing is not complete. Check DOCS/client-api-changes.rst for a history
+of changes to the client API. A complete changelog can be seen by running
+`git log v0.13.0..v0.14.0` in the git repository or by visiting either
+https://github.com/mpv-player/mpv/compare/v0.13.0...v0.14.0 or
+http://git.srsfckn.biz/mpv/log/?qt=range&q=v0.13.0..v0.14.0
+
+
+Release 0.13.0
+==============
+
+NOTE: The previous release changed the default format for youtube-dl and
+removed some workarounds related to MPEG DASH support. However, the required
+changes to FFmpeg code (FFmpeg commit 4ab56667594842283dc5ae07f0daba2a2cb4d3af)
+are not in any FFmpeg release yet (as of 2015-11-10), so for now, playing DASH
+streams requires using FFmpeg git master. You can work around this by using the
+--ytdl-format=best option.
+
+
+Features
+--------
+
+New
+~~~
+
+- SVG version of the icon (with symbolic counterpart)
+- stream_libarchive: add multivolume support
+- vo_opengl: add prescaling framework along with Super-xBR and NNEDI3 (currently very slow) prescalers (issue #2230)
+
+
+Options and Commands
+--------------------
+
+Added
+~~~~~
+
+- command: add mistimed-frame-count property
+- vo_opengl: add vsync-fences option
+
+
+Changed
+~~~~~~~
+
+- command: make display-fps property writable
+- options: enable mpeg2 hw decoding by default if hw decoding is requested
+- vo_opengl: rename fancy-downscaling to correct-downscaling
+- vo_opengl: correct-downscaling: enable also for anamorphic clips
+- vo_opengl: rename "drm_egl" to "drm-egl"
+- vo_opengl: disable drm-egl autopickup
+- vo_opengl: never load vaapi GLX interop by default
+
+
+Fixes and Minor Enhancements
+----------------------------
+
+- ao_alsa: fix 7.1 over HDMI
+- audio: do not require full audio chain reinit for speed changes
+- rpi: add support for codecs other than h264 (mpeg2 for now)
+- vd_lavc: make hwdec fallback more tolerant
+- video: fix playback of pal8
+- video: multiple display-sync fixes
+- vo: fix no-audio mode with interpolation enabled/display-sync disabled
+- vo_direct3d: fix operation (issue #2434)
+- vo_drm: handle possible errors from sigaction
+- vo_drm: show osd in audio only mode
+- vo_opengl: do not attempt to cache frames in FBO in dumb-mode (issue #2432)
+- vo_opengl: win32: always request MMCSS for DWM
+- vo_opengl: win32: try to enable DwmFlush by default
+- vo_vdpau: check VDP_RGBA_FORMAT_A8 support
+- win32: request MMCSS "Playback" profile
+
+
+This listing is not complete. Check DOCS/client-api-changes.rst for a history
+of changes to the client API. A complete changelog can be seen by running
+`git log v0.12.0..v0.13.0` in the git repository or by visiting either
+https://github.com/mpv-player/mpv/compare/v0.12.0...v0.13.0 or
+http://git.srsfckn.biz/mpv/log/?qt=range&q=v0.12.0..v0.13.0
+
+
+Release 0.12.0
+==============
+
+NOTE: This release changes the default format for youtube-dl and removes some
+workarounds related to MPEG DASH support. However, the required changes to
+FFmpeg code are not in any FFmpeg release yet (as of 2015-10-29), so for now,
+playing DASH streams requires using FFmpeg git master. You can work around
+this by using the --ytdl-format=best option.
+
+
+Features
+--------
+
+New
+~~~
+
+- vo_opengl: support new VAAPI EGL interop (requires Mesa 11)
+- vo_opengl: vaapi: add Wayland support
+- bring back the x11 video output
+- vo_opengl: support all kinds of GBRP formats
+
+Removed
+~~~~~~~
+
+- video: remove VDA support (VideoToolbox is preferred)
+
+Behavior
+--------
+
+- vo_opengl: enable X11 EGL backend by default (disabled for NVIDIA due to driver bugs)
+- ytdl: don't override user-set format in no-video mode
+- sub: adjust behavior on mismatching video/subtitle aspect ratio
+
+
+Options and Commands
+--------------------
+
+Added
+~~~~~
+
+- audio: add option for falling back to ao_null
+- options: add support for client certificate authentication
+- input: add key name for U+3000 IDEOGRAPHIC SPACE
+- player: add audio drop/duplicate mode to video-sync
+
+Changed
+~~~~~~~
+
+- vo_opengl: remove sharpen scalers, add sharpen sub-option
+- vo_opengl: make sw suboption work without explicit backend selection
+- command: make time properties unavailable if timestamp is unknown
+- command: do not return 0 for bitrate if unknown (make property unavailable instead)
+- vo_opengl: make the default debanding settings less excessive
+- ytdl: disable --all-subs if "sub-lang" is in raw-options
+
+Removed
+~~~~~~~
+
+- video: remove user-controllable PTS sorting (--pts-association-mode)
+
+
+Fixes and Minor Enhancements
+----------------------------
+
+- player: fix another --force-window bug
+- player: add wav to list of external audio file extensions
+- ao_alsa: fix failure to find any sample format
+- player: make stop command actually stop in all cases
+- audio: various fixes related to audio device hotplugging
+- vo_xv: fix crash with --wid
+- ytdl: Remove DASH hacks, use DASH by default
+- player: be slightly less prone to framedrop in display sync mode
+- sd_lavc: extend subtitle resolution if images go outside video frame
+- player: offset chapter display by start time
+- command: make bitrate properties work correctly for external tracks
+- w32_common: disable IME
+- player: fix display-sync A/V calculation on high playback speeds
+- player: fix display sync A/V difference estimation on drops
+- player: raise display sync desync tolerance
+
+
+This listing is not complete. Check DOCS/client-api-changes.rst for a history
+of changes to the client API. A complete changelog can be seen by running
+`git log v0.11.0..v0.12.0` in the git repository or by visiting either
+https://github.com/mpv-player/mpv/compare/v0.11.0...v0.12.0 or
+http://git.srsfckn.biz/mpv/log/?qt=range&q=v0.11.0..v0.12.0
+
+
+Release 0.11.0
+==============
+
+Features
+--------
+
+New
+~~~
+
+- vo_opengl: implement debanding
+
+Removed
+~~~~~~~
+
+- audio/filter: remove center, extrastereo, karaoke, sinesuppress, sub,
+  surround, sweep, ladspa, hrtf, export and bs2b filters (these are either
+  considered useless or have replacements in lavfi)
+- video/filter: remove lavfi wrappers for noise, hqdn3d, unsharp and delogo
+  (these filters remain usable through lavfi)
+
+Behavior
+--------
+
+- vo_opengl: require FBOs by default (use dumb-mode suboption for old hardware
+  and broken drivers)
+- vo_opengl: enable debanding by default for the opengl-hq preset
+- audio/out: use new sample format determination code
+- player: prefer logical current directory path (affects logic for resuming
+  playback)
+- vf_vdpaurb: Pass through non-hardware-decoded content
+- player: make force-window=immediate work in auto-profiles
+
+
+Options and Commands
+--------------------
+
+Added
+~~~~~
+
+- af_lavrresample: add normalize suboption
+- vo_opengl: add deband, deband-iterations, deband-threshold, deband-range and
+  deband-grain suboptions
+- af_lavfi: implement af-metadata property (like vf-metadata)
+
+Changed
+~~~~~~~
+
+- command: make "add <property> 0" not change the value
+
+Removed
+~~~~~~~
+
+- vo_opengl: remove source-shader suboption
+
+
+Fixes and Minor Enhancements
+----------------------------
+
+- options: fix --no-config
+- cache: do not include backbuffer size in total stream cache size
+- audio/format: actually prefer float over double sample format for
+  int->float conversions
+- audio/format: fix interlaved vs. non-interleaved conversions
+- audio/format: revise format conversion scoring
+- video: make --field-dominance set interlaced flag
+- vf: vf_stereo3d compilation depends on libavfilter
+- vf_yadif: add hack for Libav compatibility
+- player: add opus to list of external audio file extensions
+- build: allow disabling vapoursynth completely
+- libmpv/win32: allow multiple windows at the same time
+
+
+This listing is not complete. Check DOCS/client-api-changes.rst for a history
+of changes to the client API. A complete changelog can be seen by running
+`git log v0.10.0..v0.11.0` in the git repository or by visiting either
+https://github.com/mpv-player/mpv/compare/v0.10.0...v0.11.0 or
+http://git.srsfckn.biz/mpv/log/?qt=range&q=v0.10.0..v0.11.0
+
+
 Release 0.10.0
 ==============
 

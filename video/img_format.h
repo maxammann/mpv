@@ -67,6 +67,8 @@
 #define MP_IMGFLAG_HWACCEL 0x10000
 // Set if the chroma resolution is lower than luma resolution. Unset for non-YUV.
 #define MP_IMGFLAG_SUBSAMPLED 0x20000
+// Like MP_IMGFLAG_YUV_P, but RGB. The planes are organized as in IMGFMT_GBRP.
+#define MP_IMGFLAG_RGB_P 0x40000
 
 // Exactly one of these bits is set in mp_imgfmt_desc.flags
 #define MP_IMGFLAG_COLOR_CLASS_MASK \
@@ -84,6 +86,8 @@ struct mp_imgfmt_desc {
     int8_t bpp[MP_MAX_PLANES];   // bits per pixel
     int8_t plane_bits;           // number of bits in use for plane 0
     int8_t component_bits;       // number of bits per component (0 if uneven)
+    int8_t component_full_bits;  // number of bits per component including
+                                 // internal padding (0 if uneven)
     // chroma shifts per plane (provided for convenience with planar formats)
     int8_t xs[MP_MAX_PLANES];
     int8_t ys[MP_MAX_PLANES];
@@ -205,11 +209,7 @@ enum mp_imgfmt {
     IMGFMT_VAAPI,
     IMGFMT_DXVA2,           // IDirect3DSurface9 (NV12)
     IMGFMT_MMAL,            // MMAL_BUFFER_HEADER_T
-    // These use the same underlying format, but FFmpeg requires us to keep
-    // them separate. The VDA decoder will change the format to
-    // IMGFMT_VIDEOTOOLBOX, though.
-    IMGFMT_VIDEOTOOLBOX,
-    IMGFMT_VDA,
+    IMGFMT_VIDEOTOOLBOX,    // CVPixelBufferRef
 
     // Generic pass-through of AV_PIX_FMT_*. Used for formats which don't have
     // a corresponding IMGFMT_ value.

@@ -20,13 +20,10 @@ normal driver parameters.
 
     See ``--vo=help`` for a list of compiled-in video output drivers.
 
-    The recommended output drivers are ``--vo=vdpau`` and ``--vo=opengl-hq``.
-    All other drivers are just for compatibility or special purposes.
-
-.. admonition:: Example
-
-    ``--vo=opengl,xv,``
-        Try the ``opengl`` driver, then the ``xv`` driver, then others.
+    The recommended output driver is ``--vo=opengl-hq``. All other drivers are
+    for compatibility or special purposes. By default, ``--vo=opengl`` is used,
+    but if that appears not to work, it fallback to other drivers (in the same
+    order as listed by ``--vo=help``).
 
 Available video output drivers are:
 
@@ -75,6 +72,12 @@ Available video output drivers are:
         not responding quickly enough if video FPS is close to or higher than
         the display refresh rate.
 
+``x11`` (X11 only)
+    Shared memory video output driver without hardware acceleration that works
+    whenever X11 is present.
+
+    .. note:: This is a fallback only, and should not be normally used.
+
 ``vdpau`` (X11 only)
     Uses the VDPAU interface to display and optionally also decode video.
     Hardware decoding is used with ``--hwdec=vdpau``.
@@ -102,7 +105,7 @@ Available video output drivers are:
         Select deinterlacing mode (default: 0). In older versions (as well as
         MPlayer/mplayer2) you could use this option to enable deinterlacing.
         This doesn't work anymore, and deinterlacing is enabled with either
-        the ``D`` key (by default mapped to the command ``cycle deinterlace``),
+        the ``d`` key (by default mapped to the command ``cycle deinterlace``),
         or the ``--deinterlace`` option. Also, to select the default deint mode,
         you should use something like ``--vf-defaults=vdpaupp:deint-mode=temporal``
         instead of this sub-option.
@@ -290,6 +293,29 @@ Available video output drivers are:
     color space conversion and chroma upsampling is generally in the hand of
     the hardware decoder APIs.
 
+    ``opengl`` makes use of FBOs by default. Sometimes you can achieve better
+    quality or performance by changing the ``fbo-format`` suboption to
+    ``rgb16f``, ``rgb32f`` or ``rgb``. Known problems include Mesa/Intel not
+    accepting ``rgb16``, Mesa sometimes not being compiled with float texture
+    support, and some OS X setups being very slow with ``rgb16`` but fast
+    with ``rgb32f``. If you have problems, you can also try passing the
+    ``dumb-mode=yes`` sub-option.
+
+    ``dumb-mode=<yes|no>``
+        This mode is extremely restricted, and will disable most extended
+        OpenGL features. This includes high quality scalers and custom
+        shaders!
+
+        It is intended for hardware that does not support FBOs (including GLES,
+        which supports it insufficiently), or to get some more performance out
+        of bad or old hardware.
+
+        This mode is forced automatically if needed, and this option is mostly
+        useful for debugging. It's also enabled automatically if nothing uses
+        features which require FBOs.
+
+        This option might be silently removed in the future.
+
     ``scale=<filter>``
 
         ``bilinear``
@@ -355,10 +381,6 @@ Available video output drivers are:
             Scale parameter (``t``). Increasing this makes the result blurrier.
             Defaults to 1.
 
-        sharpen3, sharpen5
-            Sharpening strength. Increasing this makes the image sharper but
-            adds more ringing and aliasing. Defaults to 0.5.
-
         oversample
             Minimum distance to an edge before interpolation is used. Setting
             this to 0 will always interpolate edges, whereas setting it to 0.5
@@ -388,8 +410,8 @@ Available video output drivers are:
         between 0.0 and 1.0. The default value of 0.0 disables antiringing
         entirely.
 
-        Note that this doesn't affect the special filters ``bilinear``,
-        ``bicubic_fast`` or ``sharpen``.
+        Note that this doesn't affect the special filters ``bilinear`` and
+        ``bicubic_fast``.
 
     ``scale-window=<window>``
         (Advanced users only) Choose a custom windowing function for the kernel.
@@ -408,6 +430,15 @@ Available video output drivers are:
         gaussian
             Scale parameter (t). Increasing this makes the window wider.
             Defaults to 1.
+
+    ``scaler-lut-size=<4..10>``
+        Set the size of the lookup texture for scaler kernels (default: 6).
+        The actual size of the texture is ``2^N`` for an option value of ``N``.
+        So the lookup texture with the default setting uses 64 samples.
+
+        All weights are bilinearly interpolated from those samples, so
+        increasing the size of lookup table might improve the accuracy of
+        scaler.
 
     ``scaler-resizes-only``
         Disable the scaler if the video image is not resized. In that case,
@@ -469,6 +500,10 @@ Available video output drivers are:
         Reduce stuttering caused by mismatches in the video fps and display
         refresh rate (also known as judder).
 
+        .. warning:: This requires setting the ``--video-sync`` option to one
+                     of the ``display-`` modes, or it will be silently disabled.
+                     This was not required before mpv 0.14.0.
+
         This essentially attempts to interpolate the missing frames by
         convoluting the video along the temporal axis. The filter used can be
         controlled using the ``tscale`` setting.
@@ -500,7 +535,7 @@ Available video output drivers are:
         The filter used for interpolating the temporal axis (frames). This is
         only used if ``interpolation`` is enabled. The only valid choices
         for ``tscale`` are separable convolution filters (use ``tscale=help``
-        to get a list). The default is ``oversample``.
+        to get a list). The default is ``mitchell``.
 
         Note that the maximum supported filter radius is currently 3, due to
         limitations in the number of video textures that can be loaded
@@ -522,25 +557,86 @@ Available video output drivers are:
         Scale in linear light. It should only be used with a ``fbo-format``
         that has at least 16 bit precision.
 
-    ``fancy-downscaling``
+    ``correct-downscaling``
         When using convolution based filters, extend the filter size
-        when downscaling. Trades quality for reduced downscaling performance.
+        when downscaling. Increases quality, but reduces performance while
+        downscaling.
 
-        This is automatically disabled for anamorphic video, because this
-        feature doesn't work correctly with different scale factors in
-        different directions.
+        This will perform slightly sub-optimally for anamorphic video (but still
+        better than without it) since it will extend the size to match only the
+        milder of the scale factors between the axes.
 
-    ``source-shader=<file>``, ``scale-shader=<file>``, ``pre-shaders=<files>``, ``post-shaders=<files>``
+    ``prescale=<filter>``
+        This option provides non-convolution-based filters for upscaling. These
+        filters resize the video to multiple of the original size (all currently
+        supported prescalers can only perform image doubling in a single pass).
+        Generally another convolution based filter (the main scaler) will be
+        applied after prescaler to match the target display size.
+
+        ``none``
+            Disable all prescalers. This is the default.
+
+        ``superxbr``
+            A relatively fast prescaler originally developed for pixel art.
+
+            Some parameters can be tuned with ``superxbr-sharpness`` and
+            ``superxbr-edge-strength`` options.
+
+        ``nnedi3``
+            An artificial neural network based deinterlacer, which can be used
+            to upscale images.
+
+            Extremely slow and requires a recent mid or high end graphics card
+            to work smoothly (as of 2015).
+
+        Note that all the filters above are designed (or implemented) to process
+        luma plane only and probably won't work as intended for video in RGB
+        format.
+
+    ``prescale-passes=<1..5>``
+        The number of passes to apply the prescaler (defaults to be 1). Setting
+        it to 2 will perform a 4x upscaling.
+
+    ``prescale-downscaling-threshold=<0..32>``
+        This option prevents "overkill" use of prescalers, which can be caused
+        by misconfiguration, or user trying to play a video with much larger
+        size. With this option, user can specify the maximal allowed downscaling
+        ratio in both dimension. To satisfy it, the number of passes for
+        prescaler will be reduced, and if necessary prescaler could also be
+        disabled.
+
+        The default value is 2.0, and should be able to prevent most seemingly
+        unreasonable use of prescalers. Most user would probably want to set it
+        to a smaller value between 1.0 and 1.5 for better performance.
+
+        A value less than 1.0 will disable the check.
+
+    ``nnedi3-neurons=<16|32|64|128>``
+        Specify the neurons for nnedi3 prescaling (defaults to be 32). The
+        rendering time is expected to be linear to the number of neurons.
+
+    ``nnedi3-window=<8x4|8x6>``
+        Specify the size of local window for sampling in nnedi3 prescaling
+        (defaults to be ``8x4``). The ``8x6`` window produces sharper images,
+        but is also slower.
+
+    ``nnedi3-upload=<ubo|shader>``
+        Specify how to upload the NN weights to GPU. Depending on the graphics
+        card, driver, shader compiler and nnedi3 settings, both method can be
+        faster or slower.
+
+        ``ubo``
+            Upload these weights via uniform buffer objects. This is the
+            default. (requires OpenGL 3.1 / GLES 3.0)
+
+        ``shader``
+            Hard code all the weights into the shader source code. (requires
+            OpenGL 3.3 / GLES 3.0)
+
+
+    ``pre-shaders=<files>``, ``post-shaders=<files>``, ``scale-shader=<file>``
         Custom GLSL fragment shaders.
 
-        source-shader
-            This gets applied directly onto the source planes, before
-            any sort of upscaling or conversion whatsoever. For YCbCr content,
-            this means it gets applied on the luma and chroma planes
-            separately. In general, this shader shouldn't be making any
-            assumptions about the colorspace. It could be RGB, YCbCr, XYZ or
-            something else entirely. It's used purely for fixing numerical
-            quirks of the input, eg. debanding or deblocking.
         pre-shaders (list)
             These get applied after conversion to RGB and before linearization
             and upscaling. Operates on non-linear RGB (same as input). This is
@@ -581,10 +677,6 @@ Available video output drivers are:
             never resets (regardless of seeks).
         vec2 image_size
             The size in pixels of the input image.
-        float cmul (source-shader only)
-            The multiplier needed to pull colors up to the right bit depth. The
-            source-shader must multiply any sampled colors by this, in order
-            to normalize them to the full scale.
 
         For example, a shader that inverts the colors could look like this::
 
@@ -593,6 +685,37 @@ Available video output drivers are:
                 vec4 color = texture(tex, pos);
                 return vec4(1.0 - color.rgb, color.a);
             }
+
+    ``deband``
+        Enable the debanding algorithm. This greatly reduces the amount of
+        visible banding, blocking and other quantization artifacts, at the
+        expensive of very slightly blurring some of the finest details. In
+        practice, it's virtually always an improvement - the only reason to
+        disable it would be for performance.
+
+    ``deband-iterations=<1..16>``
+        The number of debanding steps to perform per sample. Each step reduces
+        a bit more banding, but takes time to compute. Note that the strength
+        of each step falls off very quickly, so high numbers (>4) are
+        practically useless. (Default 1)
+
+    ``deband-threshold=<0..4096>``
+        The debanding filter's cut-off threshold. Higher numbers increase the
+        debanding strength dramatically but progressively diminish image
+        details. (Default 64)
+
+    ``deband-range=<1..64>``
+        The debanding filter's initial radius. The radius increases linearly
+        for each iteration. A higher radius will find more gradients, but
+        a lower radius will smooth more aggressively. (Default 16)
+
+        If you increase the ``deband-iterations``, you should probably
+        decrease this to compensate.
+
+    ``deband-grain=<0..4096>``
+        Add some extra noise to the image. This significantly helps cover up
+        remaining quantization artifacts. Higher numbers add more noise.
+        (Default 48)
 
     ``sigmoid-upscaling``
         When upscaling, use a sigmoidal color transform to avoid emphasizing
@@ -605,6 +728,16 @@ Available video output drivers are:
     ``sigmoid-slope``
         The slope of the sigmoid curve used for ``sigmoid-upscaling``, must
         be a float between 1.0 and 20.0. Defaults to 6.5 if not specified.
+
+    ``sharpen=<value>``
+        If set to a value other than 0, enable an unsharp masking filter.
+        Positive values will sharpen the image (but add more ringing and
+        aliasing). Negative values will blur the image. If your GPU is powerful
+        enough, consider alternatives like the ``ewa_lanczossharp`` scale
+        filter, or the ``scale-blur`` sub-option.
+
+        (This feature is the replacement for the old ``sharpen3`` and
+        ``sharpen5`` scalers.)
 
     ``glfinish``
         Call ``glFinish()`` before and after swapping buffers (default: disabled).
@@ -619,11 +752,24 @@ Available video output drivers are:
 
         X11/GLX only.
 
-    ``dwmflush=<no|windowed|yes>``
-        Calls ``DwmFlush`` after swapping buffers on Windows (default: no).
+    ``vsync-fences=<N>``
+        Synchronize the CPU to the Nth past frame using the ``GL_ARB_sync``
+        extension. A value of 0 disables this behavior (default). A value of
+        1 means it will synchronize to the current frame after rendering it.
+        Like ``glfinish`` and ``waitvsync``, this can lower or ruin performance.
+        Its advantage is that it can span multiple frames, and effectively limit
+        the number of frames the GPU queues ahead (which also has an influence
+        on vsync).
+
+    ``dwmflush=<no|windowed|yes|auto>``
+        Calls ``DwmFlush`` after swapping buffers on Windows (default: auto).
         It also sets ``SwapInterval(0)`` to ignore the OpenGL timing. Values
         are: no (disabled), windowed (only in windowed mode), yes (also in
         full screen).
+
+        The value ``auto`` will try to determine whether the compositor is
+        active, and calls ``DwmFlush`` only if it seems to be.
+
         This may help getting more consistent frame intervals, especially with
         high-fps clips - which might also reduce dropped frames. Typically a
         value of ``windowed`` should be enough since full screen may bypass the
@@ -645,23 +791,39 @@ Available video output drivers are:
             Cocoa/OS X
         win
             Win32/WGL
+        angle
+            Direct3D11 through the OpenGL ES translation layer ANGLE. This
+            supports almost everything the ``win`` backend does, except ICC
+            profiles, high bit depth video input, and the ``nnedi3`` prescaler.
+        dxinterop (experimental)
+            Win32, using WGL for rendering and Direct3D 9Ex for presentation.
+            Works on Nvidia and AMD only.
         x11
             X11/GLX
         wayland
             Wayland/EGL
+        drm-egl
+            DRM/EGL
         x11egl
             X11/EGL
 
-    ``es``
-        Force or prefer GLES2/3 over desktop OpenGL, if supported.
+    ``es=<mode>``
+        Select whether to use GLES:
+
+        yes
+            Try to prefer ES over Desktop GL
+        no
+            Try to prefer desktop GL over ES
+        auto
+            Use the default for each backend (default)
 
     ``fbo-format=<fmt>``
         Selects the internal format of textures used for FBOs. The format can
-        influence performance and quality of the video output. (FBOs are not
-        always used, and typically only when using extended scalers.)
+        influence performance and quality of the video output.
         ``fmt`` can be one of: rgb, rgba, rgb8, rgb10, rgb10_a2, rgb16, rgb16f,
         rgb32f, rgba12, rgba16, rgba16f, rgba32f.
-        Default: rgba16.
+        Default: ``auto``, which maps to rgba16 on desktop GL, and rgb10_a2 on
+        GLES (e.g. ANGLE).
 
     ``gamma=<0.1..2.0>``
         Set a gamma value (default: 1.0). If gamma is adjusted in other ways
@@ -741,7 +903,8 @@ Available video output drivers are:
         Automatically select the ICC display profile currently specified by
         the display settings of the operating system.
 
-        NOTE: Only implemented on OS X and X11
+        NOTE: On Windows, the default profile must be an ICC profile. WCS
+        profiles are not supported.
 
     ``icc-cache-dir=<dirname>``
         Store and load the 3D LUTs created from the ICC profile in this directory.
@@ -821,17 +984,10 @@ Available video output drivers are:
 
     This is equivalent to::
 
-        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:fancy-downscaling:sigmoid-upscaling:pbo
+        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:correct-downscaling:sigmoid-upscaling:pbo:deband:es=no
 
     Note that some cheaper LCDs do dithering that gravely interferes with
     ``opengl``'s dithering. Disabling dithering with ``dither-depth=no`` helps.
-
-    Unlike ``opengl``, ``opengl-hq`` makes use of FBOs by default. Sometimes you
-    can achieve better quality or performance by changing the ``fbo-format``
-    suboption to ``rgb16f``, ``rgb32f`` or ``rgb``. Known problems include
-    Mesa/Intel not accepting ``rgb16``, Mesa sometimes not being compiled with
-    float texture support, and some OS X setups being very slow with ``rgb16``
-    but fast with ``rgb32f``.
 
 ``sdl``
     SDL 2.0+ Render video output driver, depending on system with or without
@@ -868,7 +1024,7 @@ Available video output drivers are:
 
     ``deint-mode=<mode>``
         Select deinterlacing algorithm. Note that by default deinterlacing is
-        initially always off, and needs to be enabled with the ``D`` key
+        initially always off, and needs to be enabled with the ``d`` key
         (default key binding for ``cycle deinterlace``).
 
         This option doesn't apply if libva supports video post processing (vpp).
@@ -966,27 +1122,6 @@ Available video output drivers are:
 ``opengl-cb``
     For use with libmpv direct OpenGL embedding; useless in any other contexts.
     (See ``<mpv/opengl_cb.h>``.)
-    Usually, ``opengl-cb`` renders frames asynchronously by client and this
-    can cause some frame drops. In order to provide a way to handle this
-    situation, ``opengl-cb`` has its own frame queue and calls update callback
-    more frequently if the queue is not empty regardless of existence of new frame.
-    Once the queue is filled, ``opengl-cb`` drops frames automatically.
-
-    With default options, ``opengl-cb`` renders only the latest frame and drops
-    all frames handed over while waiting render function after update callback.
-
-    ``frame-queue-size=<1..100>``
-        The maximum count of frames which the frame queue can hold (default: 1)
-
-    ``frame-drop-mode=<pop|clear|block>``
-        Select the behavior when the frame queue is full.
-
-        pop
-            Drop the oldest frame in the frame queue.
-        clear
-            Drop all frames in the frame queue.
-        block
-            Wait for a short time, behave like ``clear`` on timeout. (default)
 
     This also supports many of the suboptions the ``opengl`` VO has. Run
     ``mpv --vo=opengl-cb:help`` for a list.
@@ -1011,10 +1146,15 @@ Available video output drivers are:
         Normally it's better to kill the console framebuffer instead, which
         gives better performance.
 
+    ``osd=<yes|no>``
+        Enabled by default. If disabled with ``no``, no OSD layer is created.
+        This also means there will be no subtitles rendered.
+
 ``drm`` (Direct Rendering Manager)
     Video output driver using Kernel Mode Setting / Direct Rendering Manager.
-    Does not support hardware acceleration. Should be used when one doesn't
-    want to install full-blown graphical environment (e.g. no X).
+    Should be used when one doesn't want to install full-blown graphical
+    environment (e.g. no X). Does not support hardware acceleration (if you
+    need this, check the ``drm-egl`` backend for ``opengl`` VO).
 
     ``connector=<number>``
         Select the connector to use (usually this is a monitor.) If set to -1,

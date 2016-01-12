@@ -58,13 +58,6 @@ void mp_audio_set_num_channels(struct mp_audio *mpa, int num_channels)
     update_redundant_info(mpa);
 }
 
-// Use old MPlayer/ALSA channel layout.
-void mp_audio_set_channels_old(struct mp_audio *mpa, int num_channels)
-{
-    mp_chmap_from_channels_alsa(&mpa->channels, num_channels);
-    update_redundant_info(mpa);
-}
-
 void mp_audio_set_channels(struct mp_audio *mpa, const struct mp_chmap *chmap)
 {
     mpa->channels = *chmap;
@@ -330,21 +323,23 @@ struct mp_audio *mp_audio_from_avframe(struct AVFrame *avframe)
     }
 
     // If we can't handle the format (e.g. too many channels), bail out.
-    if (!mp_audio_config_valid(new) || avframe->nb_extended_buf)
+    if (!mp_audio_config_valid(new))
         goto fail;
 
-    for (int n = 0; n < AV_NUM_DATA_POINTERS; n++) {
-        if (!avframe->buf[n])
+    for (int n = 0; n < AV_NUM_DATA_POINTERS + avframe->nb_extended_buf; n++) {
+        AVBufferRef *buf = n < AV_NUM_DATA_POINTERS ? avframe->buf[n]
+                            : avframe->extended_buf[n - AV_NUM_DATA_POINTERS];
+        if (!buf)
             break;
         if (n >= MP_NUM_CHANNELS)
             goto fail;
-        new->allocated[n] = av_buffer_ref(avframe->buf[n]);
+        new->allocated[n] = av_buffer_ref(buf);
         if (!new->allocated[n])
             goto fail;
     }
 
     for (int n = 0; n < new->num_planes; n++)
-        new->planes[n] = avframe->data[n];
+        new->planes[n] = avframe->extended_data[n];
     new->samples = avframe->nb_samples;
 
     return new;

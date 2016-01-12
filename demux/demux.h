@@ -242,7 +242,7 @@ typedef struct {
 void free_demuxer(struct demuxer *demuxer);
 void free_demuxer_and_stream(struct demuxer *demuxer);
 
-int demux_add_packet(struct sh_stream *stream, demux_packet_t *dp);
+void demux_add_packet(struct sh_stream *stream, demux_packet_t *dp);
 
 struct demux_packet *demux_read_packet(struct sh_stream *sh);
 int demux_read_packet_async(struct sh_stream *sh, struct demux_packet **out_pkt);
@@ -271,6 +271,7 @@ bool demux_cancel_test(struct demuxer *demuxer);
 void demux_flush(struct demuxer *demuxer);
 int demux_seek(struct demuxer *demuxer, double rel_seek_secs, int flags);
 void demux_set_enable_refresh_seeks(struct demuxer *demuxer, bool enabled);
+void demux_set_ts_offset(struct demuxer *demuxer, double offset);
 
 int demux_control(struct demuxer *demuxer, int cmd, void *arg);
 

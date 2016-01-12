@@ -76,10 +76,12 @@ static const char *mp_get_platform_path(void *talloc_ctx,
     const char *force_configdir = getenv("MPV_HOME");
     if (global->opts->force_configdir && global->opts->force_configdir[0])
         force_configdir = global->opts->force_configdir;
+    if (!global->opts->load_config)
+        force_configdir = "";
     if (force_configdir) {
         for (int n = 0; n < MP_ARRAY_SIZE(config_dirs); n++) {
             if (strcmp(config_dirs[n], type) == 0)
-                return n == 0 ? force_configdir : NULL;
+                return (n == 0 && force_configdir[0]) ? force_configdir : NULL;
         }
     }
 
@@ -224,17 +226,19 @@ char *mp_splitext(const char *path, bstr *root)
 
 char *mp_path_join_bstr(void *talloc_ctx, struct bstr p1, struct bstr p2)
 {
+    bool test;
     if (p1.len == 0)
         return bstrdup0(talloc_ctx, p2);
     if (p2.len == 0)
         return bstrdup0(talloc_ctx, p1);
 
 #if HAVE_DOS_PATHS
-    if ((p2.len >= 2 && p2.start[1] == ':')
-        || p2.start[0] == '\\' || p2.start[0] == '/')
+    test = (p2.len >= 2 && p2.start[1] == ':')
+        || p2.start[0] == '\\' || p2.start[0] == '/';
 #else
-    if (p2.start[0] == '/')
+    test = p2.start[0] == '/';
 #endif
+    if (test)
         return bstrdup0(talloc_ctx, p2);   // absolute path
 
     bool have_separator;
@@ -257,6 +261,10 @@ char *mp_path_join(void *talloc_ctx, const char *p1, const char *p2)
 
 char *mp_getcwd(void *talloc_ctx)
 {
+    char *e_wd = getenv("PWD");
+    if (e_wd)
+        return talloc_strdup(talloc_ctx, e_wd);
+
     char *wd = talloc_array(talloc_ctx, char, 20);
     while (getcwd(wd, talloc_get_size(wd)) == NULL) {
         if (errno != ERANGE) {

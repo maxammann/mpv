@@ -10,6 +10,11 @@ from waftools.checks.custom import *
 
 build_options = [
     {
+        'name': '--gpl3',
+        'desc': 'GPL3 license',
+        'default': 'disable',
+        'func': check_true
+    }, {
         'name': '--cplayer',
         'desc': 'mpv CLI player',
         'default': 'enable',
@@ -130,14 +135,13 @@ main_dependencies = [
         'name': 'win32',
         'desc': 'win32',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
-        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid']),
+        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt', 'dwmapi']),
     }, {
         'name': '--win32-internal-pthreads',
         'desc': 'internal pthread wrapper for win32 (Vista+)',
         'deps_neg': [ 'posix' ],
         'deps': [ 'win32' ],
         'func': check_true,
-        'default': 'disable',
     }, {
         'name': 'pthreads',
         'desc': 'POSIX threads',
@@ -172,6 +176,10 @@ main_dependencies = [
         'desc': 'compiler support for usable thread synchronization built-ins',
         'func': check_true,
         'deps_any': ['stdatomic', 'atomic-builtins', 'sync-builtins'],
+    }, {
+        'name': 'c11-tls',
+        'desc': 'C11 TLS support',
+        'func': check_statement('stddef.h', 'static _Thread_local int x = 0'),
     }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
@@ -239,6 +247,10 @@ iconv support use --disable-iconv.",
         'desc': 'vt.h',
         'func': check_statement(['sys/vt.h', 'sys/ioctl.h'],
                                 'int m; ioctl(0, VT_GETMODE, &m)'),
+    }, {
+        'name': 'gbm.h',
+        'desc': 'gbm.h',
+        'func': check_cc(header_name=['stdio.h', 'gbm.h']),
     }, {
         'name': 'glibc-thread-name',
         'desc': 'GLIBC API for setting thread name',
@@ -348,34 +360,27 @@ iconv support use --disable-iconv.",
         'deps': [ 'iconv' ],
         'func': check_pkg_config('uchardet'),
     }, {
-        'name': '--ladspa',
-        'desc': 'LADSPA plugin support',
-        'func': check_statement('ladspa.h', 'LADSPA_Descriptor ld = {0}'),
-    }, {
         'name': '--rubberband',
         'desc': 'librubberband support',
         'func': check_pkg_config('rubberband', '>= 1.8.0'),
-    }, {
-        'name': '--libbs2b',
-        'desc': 'libbs2b audio filter support',
-        'func': check_pkg_config('libbs2b'),
     }, {
         'name': '--lcms2',
         'desc': 'LCMS2 support',
         'func': check_pkg_config('lcms2', '>= 2.6'),
     }, {
-        'name': 'vapoursynth-core',
-        'desc': 'VapourSynth filter bridge (core)',
-        'func': check_pkg_config('vapoursynth >= 24'),
-    }, {
         'name': '--vapoursynth',
         'desc': 'VapourSynth filter bridge (Python)',
-        'deps': ['vapoursynth-core'],
-        'func': check_pkg_config('vapoursynth-script >= 23'),
+        'func': check_pkg_config('vapoursynth',        '>= 24',
+                                 'vapoursynth-script', '>= 23'),
     }, {
         'name': '--vapoursynth-lazy',
         'desc': 'VapourSynth filter bridge (Lazy Lua)',
-        'deps': ['vapoursynth-core', 'lua'],
+        'deps': ['lua'],
+        'func': check_pkg_config('vapoursynth',        '>= 24'),
+    }, {
+        'name': 'vapoursynth-core',
+        'desc': 'VapourSynth filter bridge (core)',
+        'deps_any': ['vapoursynth', 'vapoursynth-lazy'],
         'func': check_true,
     }, {
         'name': '--libarchive',
@@ -455,7 +460,25 @@ FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_
         'func': check_statement('libavutil/avutil.h',
                                 'const char *x = av_version_info()',
                                 use='libav'),
-    }
+    }, {
+        'name': 'av-new-pixdesc',
+        'desc': 'libavutil new pixdesc fields',
+        'func': check_statement('libavutil/pixdesc.h',
+                                'AVComponentDescriptor d; int x = d.depth',
+                                use='libav'),
+    }, {
+        'name': 'av-avpacket-int64-duration',
+        'desc': 'libavcodec 64 bit AVPacket.duration',
+        'func': check_statement('libavcodec/avcodec.h',
+                                'int x[(int)sizeof(((AVPacket){0}).duration) - 7]',
+                                use='libav'),
+    }, {
+        'name': 'av-subtitle-nopict',
+        'desc': 'libavcodec AVSubtitleRect AVPicture removal',
+        'func': check_statement('libavcodec/avcodec.h',
+                                'AVSubtitleRect r = {.linesize={0}}',
+                                use='libav'),
+    },
 ]
 
 audio_output_features = [
@@ -554,6 +577,16 @@ video_output_features = [
         'name': '--cocoa',
         'desc': 'Cocoa',
         'func': check_cocoa
+    }, {
+        'name': '--drm',
+        'desc': 'DRM',
+        'deps': [ 'vt.h' ],
+        'func': check_pkg_config('libdrm'),
+    }, {
+        'name': '--gbm',
+        'desc': 'GBM',
+        'deps': [ 'gbm.h' ],
+        'func': check_pkg_config('gbm'),
     } , {
         'name': '--wayland',
         'desc': 'Wayland',
@@ -609,7 +642,12 @@ video_output_features = [
         'deps': [ 'x11' ],
         'groups': [ 'gl' ],
         'func': check_pkg_config('egl', 'gl'),
-        'default': 'disable',
+    } , {
+        'name': '--egl-drm',
+        'desc': 'OpenGL DRM EGL Backend',
+        'deps': [ 'drm', 'gbm' ],
+        'groups': [ 'gl' ],
+        'func': check_pkg_config('egl', 'gl'),
     } , {
         'name': '--gl-wayland',
         'desc': 'OpenGL Wayland Backend',
@@ -625,6 +663,22 @@ video_output_features = [
         'func': check_statement('windows.h', 'wglCreateContext(0)',
                                 lib='opengl32')
     } , {
+        'name': '--gl-dxinterop',
+        'desc': 'OpenGL/DirectX Interop Backend',
+        'deps': [ 'gl-win32' ],
+        'groups': [ 'gl' ],
+        'func': compose_checks(
+            check_statement(['GL/gl.h', 'GL/wglext.h'], 'int i = WGL_ACCESS_WRITE_DISCARD_NV'),
+            check_statement('d3d9.h', 'IDirect3D9Ex *d'))
+    } , {
+        'name': '--egl-angle',
+        'desc': 'OpenGL Win32 ANGLE Backend',
+        'deps_any': [ 'os-win32', 'os-cygwin' ],
+        'groups': [ 'gl' ],
+        'func': check_statement(['EGL/egl.h'],
+                                'eglCreateWindowSurface(0, 0, 0, 0)',
+                                lib='EGL')
+    } , {
         'name': '--vdpau',
         'desc': 'VDPAU acceleration',
         'deps': [ 'x11' ],
@@ -637,28 +691,40 @@ video_output_features = [
     }, {
         'name': '--vaapi',
         'desc': 'VAAPI acceleration',
-        'deps': [ 'x11', 'libdl' ],
-        'func': check_pkg_config(
-            'libva', '>= 0.34.0', 'libva-x11', '>= 0.34.0'),
+        'deps': [ 'libdl' ],
+        'deps_any': [ 'x11', 'wayland' ],
+        'func': check_pkg_config('libva', '>= 0.36.0'),
     }, {
-        'name': '--vaapi-vpp',
-        'desc': 'VAAPI VPP',
-        'deps': [ 'vaapi' ],
-        'func': check_pkg_config('libva', '>= 0.34.0'),
+        'name': '--vaapi-x11',
+        'desc': 'VAAPI (X11 support)',
+        'deps': [ 'vaapi', 'x11' ],
+        'func': check_pkg_config('libva-x11', '>= 0.36.0'),
+    }, {
+        'name': '--vaapi-wayland',
+        'desc': 'VAAPI (Wayland support)',
+        'deps': [ 'vaapi', 'gl-wayland' ],
+        'func': check_pkg_config('libva-wayland', '>= 0.36.0'),
+
     }, {
         'name': '--vaapi-glx',
         'desc': 'VAAPI GLX',
-        'deps': [ 'vaapi', 'gl-x11' ],
+        'deps': [ 'vaapi-x11', 'gl-x11' ],
+        'func': check_true,
+    }, {
+        'name': '--vaapi-x-egl',
+        'desc': 'VAAPI EGL on X11',
+        'deps': [ 'vaapi-x11', 'egl-x11' ],
+        'func': check_true,
+    }, {
+        'name': 'vaapi-egl',
+        'desc': 'VAAPI EGL',
+        'deps': [ 'c11-tls' ], # indirectly
+        'deps_any': [ 'vaapi-x-egl', 'vaapi-wayland' ],
         'func': check_true,
     }, {
         'name': '--caca',
         'desc': 'CACA',
         'func': check_pkg_config('caca', '>= 0.99.beta18'),
-    }, {
-        'name': '--drm',
-        'desc': 'DRM',
-        'deps': [ 'vt.h' ],
-        'func': check_pkg_config('libdrm'),
     }, {
         'name': '--jpeg',
         'desc': 'JPEG support',
@@ -694,7 +760,7 @@ video_output_features = [
     } , {
         'name': '--gl',
         'desc': 'OpenGL video outputs',
-        'deps_any': [ 'gl-cocoa', 'gl-x11', 'gl-win32', 'gl-wayland', 'rpi' ],
+        'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-drm', 'gl-win32', 'gl-wayland', 'rpi' ],
         'func': check_true
     }
 ]
@@ -705,27 +771,6 @@ hwaccel_features = [
         'desc': 'libavcodec VAAPI hwaccel',
         'deps': [ 'vaapi' ],
         'func': check_headers('libavcodec/vaapi.h', use='libav'),
-    } , {
-        'name': '--vda-hwaccel',
-        'desc': 'libavcodec VDA hwaccel',
-        'func': compose_checks(
-            check_headers('VideoDecodeAcceleration/VDADecoder.h'),
-            check_statement('libavcodec/vda.h',
-                            'av_vda_alloc_context()',
-                            framework='IOSurface',
-                            use='libav')),
-    } , {
-        'name': 'vda-default-init2',
-        'desc': 'libavcodec VDA hwaccel (configurable AVVDAContext)',
-        'deps': [ 'vda-hwaccel' ],
-        'func': check_statement('libavcodec/vda.h',
-                                'av_vda_default_init2(NULL, NULL)',
-                                use='libav'),
-    }, {
-        'name': '--vda-gl',
-        'desc': 'VDA with OpenGL',
-        'deps': [ 'gl-cocoa', 'vda-hwaccel' ],
-        'func': check_true
     }, {
         'name': '--videotoolbox-hwaccel',
         'desc': 'libavcodec videotoolbox hwaccel',
@@ -741,11 +786,6 @@ hwaccel_features = [
         'deps': [ 'gl-cocoa', 'videotoolbox-hwaccel' ],
         'func': check_true
     } , {
-        'name': 'videotoolbox-vda-gl',
-        'desc': 'Videotoolbox or VDA with OpenGL',
-        'deps_any': [ 'videotoolbox-gl', 'vda-gl' ],
-        'func': check_true
-    }, {
         'name': '--vdpau-hwaccel',
         'desc': 'libavcodec VDPAU hwaccel',
         'deps': [ 'vdpau' ],
@@ -757,6 +797,11 @@ hwaccel_features = [
         'desc': 'libavcodec DXVA2 hwaccel',
         'deps': [ 'win32' ],
         'func': check_headers('libavcodec/dxva2.h', use='libav'),
+    }, {
+        'name': 'sse4-intrinsics',
+        'desc': 'GCC SSE4 intrinsics for GPU memcpy',
+        'deps_any': [ 'dxva2-hwaccel', 'vaapi-hwaccel' ],
+        'func': check_cc(fragment=load_fragment('sse.c')),
     }
 ]
 
@@ -785,11 +830,6 @@ radio_and_tv_features = [
         'desc': 'libv4l2 support',
         'func': check_pkg_config('libv4l2'),
         'deps': [ 'tv-v4l2' ],
-    }, {
-        'name': '--pvr',
-        'desc': 'Video4Linux2 MPEG PVR interface',
-        'deps': [ 'tv' ],
-        'func': check_cc(fragment=load_fragment('pvr.c')),
     }, {
         'name': '--audio-input',
         'desc': 'audio input support',
@@ -860,7 +900,7 @@ def options(opt):
     group.add_option('--lua',
         type    = 'string',
         dest    = 'LUA_VER',
-        help    = "select Lua package which should be autodetected. Choices: 51 51deb 51fbsd 52 52deb 52fbsd luajit")
+        help    = "select Lua package which should be autodetected. Choices: 51 51deb 51fbsd 52 52deb 52arch 52fbsd luajit")
 
 @conf
 def is_optimization(ctx):

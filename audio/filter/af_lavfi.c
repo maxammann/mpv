@@ -34,11 +34,14 @@
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 
+#include "config.h"
+
 #include "audio/format.h"
 #include "audio/fmt-conversion.h"
 #include "af.h"
 
 #include "common/av_common.h"
+#include "common/tags.h"
 
 #include "options/m_option.h"
 
@@ -62,6 +65,8 @@ struct priv {
     AVRational timebase_out;
 
     bool eof;
+
+    struct mp_tags *metadata;
 
     // options
     char *cfg_graph;
@@ -190,6 +195,10 @@ static int control(struct af_instance *af, int cmd, void *arg)
         if (af_to_avformat(in->format) == AV_SAMPLE_FMT_NONE)
             mp_audio_set_format(in, AF_FORMAT_FLOAT);
 
+        // Removing this requires fixing AVFrame.data vs. AVFrame.extended_data
+        if (in->channels.num > AV_NUM_DATA_POINTERS)
+            return AF_ERROR;
+
         if (!mp_chmap_is_lavc(&in->channels))
             mp_chmap_reorder_to_lavc(&in->channels); // will always work
 
@@ -206,18 +215,35 @@ static int control(struct af_instance *af, int cmd, void *arg)
         mp_chmap_from_lavc(&out_cm, l_out->channel_layout);
         mp_audio_set_channels(out, &out_cm);
 
-        if (!mp_audio_config_valid(out))
+        if (!mp_audio_config_valid(out) || out->channels.num > AV_NUM_DATA_POINTERS)
             return AF_ERROR;
 
         p->timebase_out = l_out->time_base;
 
         return mp_audio_config_equals(in, &orig_in) ? AF_OK : AF_FALSE;
     }
+    case AF_CONTROL_GET_METADATA:
+        if (p->metadata) {
+            *(struct mp_tags *)arg = *p->metadata;
+            return CONTROL_OK;
+        }
+        return CONTROL_NA;
     case AF_CONTROL_RESET:
         reset(af);
         return AF_OK;
     }
     return AF_UNKNOWN;
+}
+
+static void get_metadata_from_av_frame(struct af_instance *af, AVFrame *frame)
+{
+#if HAVE_AVFRAME_METADATA
+    struct priv *p = af->priv;
+    if (!p->metadata)
+        p->metadata = talloc_zero(p, struct mp_tags);
+
+    mp_tags_copy_from_av_dictionary(p->metadata, av_frame_get_metadata(frame));
+#endif
 }
 
 static int filter_frame(struct af_instance *af, struct mp_audio *data)
@@ -307,6 +333,7 @@ static int filter_out(struct af_instance *af)
         af->delay = in_time - out_time;
     }
 
+    get_metadata_from_av_frame(af, frame);
     af_add_output_frame(af, out);
     av_frame_free(&frame);
     return 0;
@@ -326,8 +353,6 @@ static int af_open(struct af_instance *af)
     af->uninit = uninit;
     af->filter_frame = filter_frame;
     af->filter_out = filter_out;
-    // Removing this requires fixing AVFrame.data vs. AVFrame.extended_data
-    assert(MP_NUM_CHANNELS <= AV_NUM_DATA_POINTERS);
     return AF_OK;
 }
 

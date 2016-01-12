@@ -106,6 +106,8 @@ struct vo_cocoa_state {
     int frame_w, frame_h;               // dimensions of the frame rendered
 
     NSCursor *blankCursor;
+
+    char *window_title;
 };
 
 static void run_on_main_thread(struct vo *vo, void(^block)(void))
@@ -248,7 +250,7 @@ static void cocoa_uninit_light_sensor(struct vo_cocoa_state *s)
     }
 }
 
-int vo_cocoa_init(struct vo *vo)
+void vo_cocoa_init(struct vo *vo)
 {
     struct vo_cocoa_state *s = talloc_zero(NULL, struct vo_cocoa_state);
     *s = (struct vo_cocoa_state){
@@ -265,7 +267,10 @@ int vo_cocoa_init(struct vo *vo)
     pthread_cond_init(&s->wakeup, NULL);
     vo->cocoa = s;
     cocoa_init_light_sensor(vo);
-    return 1;
+    if (!s->embedded) {
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        set_application_icon(NSApp);
+    }
 }
 
 static int vo_cocoa_set_cursor_visibility(struct vo *vo, bool *visible)
@@ -501,18 +506,21 @@ static void create_ui(struct vo *vo, struct mp_rect *win, int geo_flags)
     }
 }
 
-static int cocoa_set_window_title(struct vo *vo, const char *title)
+static int cocoa_set_window_title(struct vo *vo)
 {
     struct vo_cocoa_state *s = vo->cocoa;
     if (s->embedded)
         return VO_NOTIMPL;
 
     void *talloc_ctx   = talloc_new(NULL);
-    struct bstr btitle = bstr_sanitize_utf8_latin1(talloc_ctx, bstr0(title));
-    NSString *nstitle  = [NSString stringWithUTF8String:btitle.start];
-    if (nstitle) {
-        [s->window setTitle: nstitle];
-        [s->window displayIfNeeded];
+    struct bstr btitle =
+        bstr_sanitize_utf8_latin1(talloc_ctx, bstr0(s->window_title));
+    if (btitle.start) {
+        NSString *nstitle  = [NSString stringWithUTF8String:btitle.start];
+        if (nstitle) {
+            [s->window setTitle: nstitle];
+            [s->window displayIfNeeded];
+        }
     }
     talloc_free(talloc_ctx);
     return VO_TRUE;
@@ -554,7 +562,7 @@ void vo_cocoa_set_opengl_ctx(struct vo *vo, CGLContextObj ctx)
     });
 }
 
-int vo_cocoa_config_window(struct vo *vo, uint32_t flags)
+int vo_cocoa_config_window(struct vo *vo)
 {
     struct vo_cocoa_state *s = vo->cocoa;
     run_on_main_thread(vo, ^{
@@ -572,7 +580,7 @@ int vo_cocoa_config_window(struct vo *vo, uint32_t flags)
         s->old_dwidth  = width;
         s->old_dheight = height;
 
-        if (!(flags & VOFLAG_HIDDEN) && !s->view) {
+        if (!s->view) {
             create_ui(vo, &geo.win, geo.flags);
         }
 
@@ -581,7 +589,7 @@ int vo_cocoa_config_window(struct vo *vo, uint32_t flags)
                 queue_new_video_size(vo, width, height);
             vo_cocoa_fullscreen(vo);
             cocoa_add_fs_screen_profile_observer(vo);
-            cocoa_set_window_title(vo, vo_get_window_title(vo));
+            cocoa_set_window_title(vo);
             vo_set_level(vo, vo->opts->ontop);
         }
 
@@ -593,11 +601,6 @@ int vo_cocoa_config_window(struct vo *vo, uint32_t flags)
         vo->dheight = s->vo_dheight = frame.size.height;
 
         [s->nsgl_ctx update];
-
-        if (!s->embedded) {
-            [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-            set_application_icon(NSApp);
-        }
     });
     return 0;
 }
@@ -765,8 +768,12 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
     }
     case VOCTRL_SET_CURSOR_VISIBILITY:
         return vo_cocoa_set_cursor_visibility(vo, arg);
-    case VOCTRL_UPDATE_WINDOW_TITLE:
-        return cocoa_set_window_title(vo, (const char *) arg);
+    case VOCTRL_UPDATE_WINDOW_TITLE: {
+        struct vo_cocoa_state *s = vo->cocoa;
+        talloc_free(s->window_title);
+        s->window_title = talloc_strdup(s, (char *) arg);
+        return cocoa_set_window_title(vo);
+    }
     case VOCTRL_RESTORE_SCREENSAVER:
         enable_power_management(vo->cocoa);
         return VO_TRUE;
@@ -798,8 +805,6 @@ static int vo_cocoa_control_async(struct vo *vo, int *events, int request, void 
     case VOCTRL_CHECK_EVENTS:
         *events |= vo_cocoa_check_events(vo);
         return VO_TRUE;
-    case VOCTRL_GET_RECENT_FLIP_TIME:
-        return VO_FALSE; // unsupported, but avoid syncing with main thread
     }
     return VO_NOTIMPL;
 }

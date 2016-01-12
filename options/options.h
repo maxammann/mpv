@@ -19,6 +19,7 @@ typedef struct mp_vo_opts {
     int fs_black_out_screens;
     char *winname;
     int x11_netwm;
+    int x11_bypass_compositor;
     int native_keyrepeat;
 
     float panscan;
@@ -41,6 +42,8 @@ typedef struct mp_vo_opts {
     float force_monitor_aspect;
     float monitor_pixel_aspect;
     int force_window_position;
+
+    char *mmcss_profile;
 
     // vo_wayland, vo_drm
     struct sws_opts *sws_opts;
@@ -81,6 +84,7 @@ typedef struct MPOpts {
     struct m_obj_settings *audio_driver_list, *ao_defs;
     char *audio_device;
     char *audio_client_name;
+    int ao_null_fallback;
     int force_vo;
     int softvol;
     float mixer_init_volume;
@@ -103,6 +107,7 @@ typedef struct MPOpts {
     int gamma_contrast;
     int gamma_saturation;
     int gamma_hue;
+    int video_output_levels;
 
     int stop_screensaver;
     int cursor_autohide_delay;
@@ -142,11 +147,11 @@ typedef struct MPOpts {
     int chapterrange[2];
     int edition_id;
     int correct_pts;
-    int user_pts_assoc_mode;
     int initial_audio_sync;
     int video_sync;
     double sync_max_video_change;
     double sync_max_audio_change;
+    double sync_audio_drop_size;
     int hr_seek;
     float hr_seek_demuxer_offset;
     int hr_seek_framedrop;
@@ -171,6 +176,7 @@ typedef struct MPOpts {
     struct m_rel_time play_start;
     struct m_rel_time play_end;
     struct m_rel_time play_length;
+    int rebase_start_time;
     int play_frames;
     double ab_loop[2];
     double step_sec;
@@ -233,7 +239,6 @@ typedef struct MPOpts {
     char **sub_paths;
     int sub_auto;
     int audiofile_auto;
-    int use_text_osd;
     int osd_bar_visible;
     float osd_bar_align_x;
     float osd_bar_align_y;
@@ -266,6 +271,7 @@ typedef struct MPOpts {
 
     int hwdec_api;
     char *hwdec_codecs;
+    int videotoolbox_format;
 
     int w32_priority;
 
@@ -276,6 +282,8 @@ typedef struct MPOpts {
     char **network_http_header_fields;
     int network_tls_verify;
     char *network_tls_ca_file;
+    char *network_tls_cert_file;
+    char *network_tls_key_file;
     double network_timeout;
 
     struct tv_params *tv_params;

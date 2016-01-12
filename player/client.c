@@ -721,6 +721,8 @@ int mpv_request_event(mpv_handle *ctx, mpv_event_id event, int enable)
 {
     if (!mpv_event_name(event) || enable < 0 || enable > 1)
         return MPV_ERROR_INVALID_PARAMETER;
+    if (event == MPV_EVENT_SHUTDOWN && !enable)
+        return MPV_ERROR_INVALID_PARAMETER;
     assert(event < (int)INTERNAL_EVENT_BASE); // excluded above; they have no name
     pthread_mutex_lock(&ctx->lock);
     uint64_t bit = 1ULL << event;
@@ -1611,7 +1613,7 @@ static const char *const err_table[] = {
     [-MPV_ERROR_LOADING_FAILED] = "loading failed",
     [-MPV_ERROR_AO_INIT_FAILED] = "audio output initialization failed",
     [-MPV_ERROR_VO_INIT_FAILED] = "audio output initialization failed",
-    [-MPV_ERROR_NOTHING_TO_PLAY] = "no audio or video data found",
+    [-MPV_ERROR_NOTHING_TO_PLAY] = "no audio or video data played",
     [-MPV_ERROR_UNKNOWN_FORMAT] = "unrecognized file format",
     [-MPV_ERROR_UNSUPPORTED] = "not supported",
     [-MPV_ERROR_NOT_IMPLEMENTED] = "operation not implemented",

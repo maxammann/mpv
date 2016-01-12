@@ -37,19 +37,22 @@
 #include "common/common.h"
 #include "misc/bstr.h"
 #include "common/msg.h"
+#include "common/global.h"
 #include "options/m_config.h"
 #include "vo.h"
 #include "video/mp_image.h"
 #include "sub/osd.h"
 
-#include "gl_common.h"
-#include "gl_utils.h"
-#include "gl_hwdec.h"
-#include "gl_osd.h"
+#include "opengl/common.h"
+#include "opengl/utils.h"
+#include "opengl/hwdec.h"
+#include "opengl/osd.h"
 #include "filter_kernels.h"
 #include "video/hwdec.h"
-#include "gl_video.h"
-#include "gl_lcms.h"
+#include "opengl/video.h"
+#include "opengl/lcms.h"
+
+#define NUM_VSYNC_FENCES 10
 
 struct gl_priv {
     struct vo *vo;
@@ -71,8 +74,8 @@ struct gl_priv {
     int use_gl_debug;
     int allow_sw;
     int swap_interval;
-    int current_swap_interval;
     int dwm_flush;
+    int opt_vsync_fences;
 
     char *backend;
     int es;
@@ -84,6 +87,9 @@ struct gl_priv {
     int opt_pattern[2];
     int last_pattern;
     int matches, mismatches;
+
+    GLsync vsync_fences[NUM_VSYNC_FENCES];
+    int num_vsync_fences;
 };
 
 static void resize(struct gl_priv *p)
@@ -96,7 +102,8 @@ static void resize(struct gl_priv *p)
     struct mp_osd_res osd;
     vo_get_src_dst_rects(vo, &src, &dst, &osd);
 
-    gl_video_resize(p->renderer, vo->dwidth, -vo->dheight, &src, &dst, &osd);
+    int height = p->glctx->flip_v ? vo->dheight : -vo->dheight;
+    gl_video_resize(p->renderer, vo->dwidth, height, &src, &dst, &osd);
 
     vo->want_redraw = true;
 }
@@ -115,6 +122,23 @@ static void check_pattern(struct vo *vo, int item)
         MP_WARN(vo, "wrong pattern, expected %d got %d (hit: %d, mis: %d)\n",
                 expected, item, p->matches, p->mismatches);
     }
+}
+
+static void draw_frame(struct vo *vo, struct vo_frame *frame)
+{
+    struct gl_priv *p = vo->priv;
+    GL *gl = p->gl;
+
+    if (gl->FenceSync && p->num_vsync_fences < p->opt_vsync_fences) {
+        GLsync fence = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);;
+        if (fence)
+            p->vsync_fences[p->num_vsync_fences++] = fence;
+    }
+
+    gl_video_render_frame(p->renderer, frame, 0);
+
+    if (p->use_glFinish)
+        gl->Finish();
 }
 
 static void flip_page(struct vo *vo)
@@ -148,28 +172,11 @@ static void flip_page(struct vo *vo)
             p->opt_pattern[0] = 0;
         }
     }
-
-    if (p->glctx->DwmFlush) {
-        p->current_swap_interval = p->glctx->DwmFlush(p->glctx, p->dwm_flush,
-                                                      p->swap_interval,
-                                                      p->current_swap_interval);
+    while (p->opt_vsync_fences > 0 && p->num_vsync_fences >= p->opt_vsync_fences) {
+        gl->ClientWaitSync(p->vsync_fences[0], GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
+        gl->DeleteSync(p->vsync_fences[0]);
+        MP_TARRAY_REMOVE_AT(p->vsync_fences, p->num_vsync_fences, 0);
     }
-}
-
-static void draw_frame(struct vo *vo, struct vo_frame *frame)
-{
-    struct gl_priv *p = vo->priv;
-    GL *gl = p->gl;
-
-    gl_video_render_frame(p->renderer, frame, 0);
-
-    // The playloop calls this last before waiting some time until it decides
-    // to call flip_page(). Tell OpenGL to start execution of the GPU commands
-    // while we sleep (this happens asynchronously).
-    gl->Flush();
-
-    if (p->use_glFinish)
-        gl->Finish();
 }
 
 static int query_format(struct vo *vo, int format)
@@ -180,11 +187,11 @@ static int query_format(struct vo *vo, int format)
     return 1;
 }
 
-static int reconfig(struct vo *vo, struct mp_image_params *params, int flags)
+static int reconfig(struct vo *vo, struct mp_image_params *params)
 {
     struct gl_priv *p = vo->priv;
 
-    if (!mpgl_reconfig_window(p->glctx, flags))
+    if (mpgl_reconfig_window(p->glctx) < 0)
         return -1;
 
     resize(p);
@@ -199,7 +206,7 @@ static void request_hwdec_api(struct gl_priv *p, const char *api_name)
     if (p->hwdec)
         return;
 
-    p->hwdec = gl_hwdec_load_api(p->vo->log, p->gl, api_name);
+    p->hwdec = gl_hwdec_load_api(p->vo->log, p->gl, p->vo->global, api_name);
     gl_video_set_hwdec(p->renderer, p->hwdec);
     if (p->hwdec)
         p->hwdec_info.hwctx = p->hwdec->hwctx;
@@ -247,7 +254,7 @@ static bool get_and_update_icc_profile(struct gl_priv *p, int *events)
 static void get_and_update_ambient_lighting(struct gl_priv *p, int *events)
 {
     int lux;
-    int r = p->glctx->vo_control(p->vo, events, VOCTRL_GET_AMBIENT_LUX, &lux);
+    int r = mpgl_control(p->glctx, events, VOCTRL_GET_AMBIENT_LUX, &lux);
     if (r == VO_TRUE) {
         gl_video_set_ambient_lux(p->renderer, lux);
     }
@@ -391,23 +398,26 @@ static int preinit(struct vo *vo)
     if (p->use_gl_debug)
         vo_flags |= VOFLAG_GL_DEBUG;
 
-    if (p->es)
+    if (p->es == 1)
         vo_flags |= VOFLAG_GLES;
+    if (p->es == -1)
+        vo_flags |= VOFLAG_NO_GLES;
 
     if (p->allow_sw)
-        vo->probing = false;
+        vo_flags |= VOFLAG_SW;
 
     p->glctx = mpgl_init(vo, p->backend, vo_flags);
     if (!p->glctx)
         goto err_out;
     p->gl = p->glctx->gl;
 
+    p->glctx->dwm_flush_opt = p->dwm_flush;
+
     if (p->gl->SwapInterval) {
         p->gl->SwapInterval(p->swap_interval);
     } else {
         MP_VERBOSE(vo, "swap_control extension missing.\n");
     }
-    p->current_swap_interval = p->swap_interval;
 
     p->renderer = gl_video_init(p->gl, vo->log, vo->global);
     if (!p->renderer)
@@ -428,9 +438,11 @@ static int preinit(struct vo *vo)
     p->hwdec_info.load_api = call_request_hwdec_api;
     p->hwdec_info.load_api_ctx = vo;
 
-    if (vo->opts->hwdec_preload_api != HWDEC_NONE) {
-        p->hwdec =
-            gl_hwdec_load_api_id(p->vo->log, p->gl, vo->opts->hwdec_preload_api);
+    int hwdec = vo->opts->hwdec_preload_api;
+    if (hwdec == HWDEC_NONE)
+        hwdec = vo->global->opts->hwdec_api;
+    if (hwdec != HWDEC_NONE) {
+        p->hwdec = gl_hwdec_load_api_id(p->vo->log, p->gl, vo->global, hwdec);
         gl_video_set_hwdec(p->renderer, p->hwdec);
         if (p->hwdec)
             p->hwdec_info.hwctx = p->hwdec->hwctx;
@@ -449,12 +461,13 @@ static const struct m_option options[] = {
     OPT_FLAG("waitvsync", waitvsync, 0),
     OPT_INT("swapinterval", swap_interval, 0, OPTDEF_INT(1)),
     OPT_CHOICE("dwmflush", dwm_flush, 0,
-               ({"no", 0}, {"windowed", 1}, {"yes", 2})),
+               ({"no", -1}, {"auto", 0}, {"windowed", 1}, {"yes", 2})),
     OPT_FLAG("debug", use_gl_debug, 0),
     OPT_STRING_VALIDATE("backend", backend, 0, mpgl_validate_backend_opt),
     OPT_FLAG("sw", allow_sw, 0),
-    OPT_FLAG("es", es, 0),
+    OPT_CHOICE("es", es, 0, ({"no", -1}, {"auto", 0}, {"yes", 1})),
     OPT_INTPAIR("check-pattern", opt_pattern, 0),
+    OPT_INTRANGE("vsync-fences", opt_vsync_fences, 0, 0, NUM_VSYNC_FENCES),
 
     OPT_SUBSTRUCT("", renderer_opts, gl_video_conf, 0),
     OPT_SUBSTRUCT("", icc_opts, mp_icc_conf, 0),
@@ -492,6 +505,7 @@ const struct vo_driver video_out_opengl_hq = {
     .priv_size = sizeof(struct gl_priv),
     .priv_defaults = &(const struct gl_priv){
         .renderer_opts = (struct gl_video_opts *)&gl_video_opts_hq_def,
+        .es = -1,
     },
     .options = options,
 };
