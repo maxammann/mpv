@@ -483,7 +483,7 @@ def build(ctx):
             else:
                 features += "cstlib"
             ctx(
-                target       = "mpv",
+                target       = "mpv-aqueduct",
                 source       = ctx.filtered_sources(sources),
                 use          = ctx.dependencies_use(),
                 includes     = [ctx.bldnode.abspath(), ctx.srcnode.abspath()] + \
