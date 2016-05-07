@@ -36,13 +36,10 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <libavfilter/avfilter.h>
 
 #if HAVE_LIBAVDEVICE
 #include <libavdevice/avdevice.h>
-#endif
-
-#if HAVE_LIBAVFILTER
-#include <libavfilter/avfilter.h>
 #endif
 
 #if HAVE_LIBAVRESAMPLE
@@ -134,12 +131,17 @@ static void mp_msg_av_log_callback(void *ptr, int level, const char *fmt,
     struct mp_log *log = get_av_log(ptr);
 
     if (mp_msg_test(log, mp_level)) {
+        char buffer[4096] = "";
+        int pos = 0;
         const char *prefix = avc ? avc->item_name(ptr) : NULL;
         if (log_print_prefix && prefix)
-            mp_msg(log, mp_level, "%s: ", prefix);
+            pos = snprintf(buffer, sizeof(buffer), "%s: ", prefix);
         log_print_prefix = fmt[strlen(fmt) - 1] == '\n';
 
-        mp_msg_va(log, mp_level, fmt, vl);
+        pos = MPMIN(MPMAX(pos, 0), sizeof(buffer));
+        vsnprintf(buffer + pos, sizeof(buffer) - pos, fmt, vl);
+
+        mp_msg(log, mp_level, "%s", buffer);
     }
 
     pthread_mutex_unlock(&log_lock);
@@ -161,10 +163,8 @@ void init_libav(struct mpv_global *global)
     avcodec_register_all();
     av_register_all();
     avformat_network_init();
-
-#if HAVE_LIBAVFILTER
     avfilter_register_all();
-#endif
+
 #if HAVE_LIBAVDEVICE
     avdevice_register_all();
 #endif
@@ -196,9 +196,7 @@ void print_libav_versions(struct mp_log *log, int v)
         {"libavcodec",    LIBAVCODEC_VERSION_INT,    avcodec_version()},
         {"libavformat",   LIBAVFORMAT_VERSION_INT,   avformat_version()},
         {"libswscale",    LIBSWSCALE_VERSION_INT,    swscale_version()},
-#if HAVE_LIBAVFILTER
         {"libavfilter",   LIBAVFILTER_VERSION_INT,   avfilter_version()},
-#endif
 #if HAVE_LIBAVRESAMPLE
         {"libavresample", LIBAVRESAMPLE_VERSION_INT, avresample_version()},
 #endif

@@ -39,8 +39,10 @@
 // usually copy the whole struct, so that fields added later will be preserved.
 struct mp_image_params {
     enum mp_imgfmt imgfmt;      // pixel format
+    uint64_t hw_subfmt;         // underlying format for some hwaccel pixfmts
+                                // (will use the HW API's format identifiers)
     int w, h;                   // image dimensions
-    int d_w, d_h;               // define display aspect ratio (never 0/0)
+    int p_w, p_h;               // define pixel aspect ratio (never 0/0)
     enum mp_csp colorspace;
     enum mp_csp_levels colorlevels;
     enum mp_csp_prim primaries;
@@ -86,6 +88,8 @@ typedef struct mp_image {
 
     /* only inside filter chain */
     double pts;
+    /* only after decoder */
+    double dts;
     /* for private use */
     void* priv;
 
@@ -136,6 +140,10 @@ char *mp_image_params_to_str_buf(char *b, size_t bs,
 bool mp_image_params_valid(const struct mp_image_params *p);
 bool mp_image_params_equal(const struct mp_image_params *p1,
                            const struct mp_image_params *p2);
+
+void mp_image_params_get_dsize(const struct mp_image_params *p,
+                               int *d_w, int *d_h);
+void mp_image_params_set_dsize(struct mp_image_params *p, int d_w, int d_h);
 
 void mp_image_set_params(struct mp_image *image,
                          const struct mp_image_params *params);

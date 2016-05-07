@@ -3,18 +3,18 @@
  *
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <assert.h>
@@ -101,16 +101,15 @@ static struct mp_image *download_image(struct mp_hwdec_ctx *ctx,
     if (hw_image->imgfmt != IMGFMT_VIDEOTOOLBOX)
         return NULL;
 
+    struct mp_image *image = NULL;
     CVPixelBufferRef pbuf = (CVPixelBufferRef)hw_image->planes[3];
-    CVPixelBufferLockBaseAddress(pbuf, 0);
+    CVPixelBufferLockBaseAddress(pbuf, kCVPixelBufferLock_ReadOnly);
     size_t width  = CVPixelBufferGetWidth(pbuf);
     size_t height = CVPixelBufferGetHeight(pbuf);
     uint32_t cvpixfmt = CVPixelBufferGetPixelFormatType(pbuf);
     struct vt_format *f = vt_get_gl_format(cvpixfmt);
-    if (!f) {
-        CVPixelBufferUnlockBaseAddress(pbuf, 0);
-        return NULL;
-    }
+    if (!f)
+        goto unlock;
 
     struct mp_image img = {0};
     mp_image_setfmt(&img, f->imgfmt);
@@ -125,8 +124,10 @@ static struct mp_image *download_image(struct mp_hwdec_ctx *ctx,
 
     mp_image_copy_attributes(&img, hw_image);
 
-    struct mp_image *image = mp_image_pool_new_copy(swpool, &img);
-    CVPixelBufferUnlockBaseAddress(pbuf, 0);
+    image = mp_image_pool_new_copy(swpool, &img);
+
+unlock:
+    CVPixelBufferUnlockBaseAddress(pbuf, kCVPixelBufferLock_ReadOnly);
 
     return image;
 }
@@ -146,14 +147,21 @@ static bool check_hwdec(struct gl_hwdec *hw)
     return true;
 }
 
+static uint32_t get_vt_fmt(struct mp_hwdec_ctx *ctx)
+{
+    struct gl_hwdec *hw = ctx->priv;
+    struct vt_format *f =
+        vt_get_gl_format_from_imgfmt(hw->global->opts->videotoolbox_format);
+    return f ? f->cvpixfmt : (uint32_t)-1;
+}
+
 static int create(struct gl_hwdec *hw)
 {
     if (!check_hwdec(hw))
         return -1;
 
     struct priv *p = talloc_zero(hw, struct priv);
-    struct vt_format *f =
-        vt_get_gl_format_from_imgfmt(hw->global->opts->videotoolbox_format);
+    struct vt_format *f = vt_get_gl_format_from_imgfmt(IMGFMT_NV12);
     if (!f)
         return -1;
 
@@ -162,17 +170,26 @@ static int create(struct gl_hwdec *hw)
     hw->hwctx = &p->hwctx;
     hw->hwctx->download_image = download_image;
     hw->hwctx->type = HWDEC_VIDEOTOOLBOX;
-    hw->hwctx->priv = (void *)(uintptr_t)f->cvpixfmt;
+    hw->hwctx->get_vt_fmt = get_vt_fmt;
 
     hw->gl_texture_target = GL_TEXTURE_RECTANGLE;
     hw->gl->GenTextures(MP_MAX_PLANES, p->gl_planes);
 
+    hw->hwctx->priv = hw;
     return 0;
 }
 
 static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
 {
     assert(params->imgfmt == hw->driver->imgfmt);
+
+    struct vt_format *f = vt_get_gl_format(params->hw_subfmt);
+    if (!f) {
+        MP_ERR(hw, "Unsupported CVPixelBuffer format.\n");
+        return -1;
+    }
+
+    hw->converted_imgfmt = f->imgfmt;
     return 0;
 }
 
@@ -237,7 +254,8 @@ static void destroy(struct gl_hwdec *hw)
 }
 
 const struct gl_hwdec_driver gl_hwdec_videotoolbox = {
-    .api_name = "videotoolbox",
+    .name = "videotoolbox",
+    .api = HWDEC_VIDEOTOOLBOX,
     .imgfmt = IMGFMT_VIDEOTOOLBOX,
     .create = create,
     .reinit = reinit,

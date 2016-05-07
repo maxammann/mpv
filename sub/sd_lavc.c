@@ -25,9 +25,10 @@
 
 #include "config.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/msg.h"
 #include "common/av_common.h"
+#include "demux/stheader.h"
 #include "options/options.h"
 #include "video/mp_image.h"
 #include "sd.h"
@@ -53,6 +54,7 @@ struct seekpoint {
 
 struct sd_lavc_priv {
     AVCodecContext *avctx;
+    AVRational pkt_timebase;
     struct sub subs[MAX_QUEUE]; // most recent event first
     struct sub_bitmap *outbitmaps;
     int64_t displayed_id;
@@ -62,21 +64,6 @@ struct sd_lavc_priv {
     struct seekpoint *seekpoints;
     int num_seekpoints;
 };
-
-static bool supports_format(const char *format)
-{
-    enum AVCodecID cid = mp_codec_to_av_codec_id(format);
-    // Supported codecs must be known to decode to paletted bitmaps
-    switch (cid) {
-    case AV_CODEC_ID_DVB_SUBTITLE:
-    case AV_CODEC_ID_HDMV_PGS_SUBTITLE:
-    case AV_CODEC_ID_XSUB:
-    case AV_CODEC_ID_DVD_SUBTITLE:
-        return true;
-    default:
-        return false;
-    }
-}
 
 static void get_resolution(struct sd *sd, int wh[2])
 {
@@ -109,8 +96,20 @@ static void get_resolution(struct sd *sd, int wh[2])
 
 static int init(struct sd *sd)
 {
+    enum AVCodecID cid = mp_codec_to_av_codec_id(sd->codec->codec);
+
+    // Supported codecs must be known to decode to paletted bitmaps
+    switch (cid) {
+    case AV_CODEC_ID_DVB_SUBTITLE:
+    case AV_CODEC_ID_HDMV_PGS_SUBTITLE:
+    case AV_CODEC_ID_XSUB:
+    case AV_CODEC_ID_DVD_SUBTITLE:
+        break;
+    default:
+        return -1;
+    }
+
     struct sd_lavc_priv *priv = talloc_zero(NULL, struct sd_lavc_priv);
-    enum AVCodecID cid = mp_codec_to_av_codec_id(sd->codec);
     AVCodecContext *ctx = NULL;
     AVCodec *sub_codec = avcodec_find_decoder(cid);
     if (!sub_codec)
@@ -118,7 +117,23 @@ static int init(struct sd *sd)
     ctx = avcodec_alloc_context3(sub_codec);
     if (!ctx)
         goto error;
-    mp_lavc_set_extradata(ctx, sd->extradata, sd->extradata_len);
+    mp_lavc_set_extradata(ctx, sd->codec->extradata, sd->codec->extradata_size);
+    if (cid == AV_CODEC_ID_HDMV_PGS_SUBTITLE) {
+        // We don't always want to set this, because the ridiculously shitty
+        // libavcodec API will mess with certain fields (end_display_time)
+        // when setting it. On the other hand, PGS in particular needs PTS
+        // mangling. While the PGS decoder doesn't modify the timestamps (just
+        // reorder it), the ridiculously shitty libavcodec wants a timebase
+        // anyway and for no good reason. It always sets end_display_time to
+        // UINT32_MAX (which is a broken and undocumented way to say "unknown"),
+        // which coincidentally won't be overridden by the ridiculously shitty
+        // pkt_timebase code. also, Libav doesn't have the pkt_timebase field,
+        // because Libav tends to avoid _adding_ ridiculously shitty APIs.
+#if LIBAVCODEC_VERSION_MICRO >= 100
+        priv->pkt_timebase = (AVRational){1, AV_TIME_BASE};
+        ctx->pkt_timebase = priv->pkt_timebase;
+#endif
+    }
     if (avcodec_open2(ctx, sub_codec, NULL) < 0)
         goto error;
     priv->avctx = ctx;
@@ -168,7 +183,9 @@ static void decode(struct sd *sd, struct demux_packet *packet)
     AVSubtitle sub;
     AVPacket pkt;
 
-    // libavformat sets duration==0, even if the duration is unknown.
+    // libavformat sets duration==0, even if the duration is unknown. Some files
+    // also have actually subtitle packets with duration explicitly set to 0
+    // (yes, at least some of such mkv files were muxed by libavformat).
     // Assume there are no bitmap subs that actually use duration==0 for
     // hidden subtitle events.
     if (duration == 0)
@@ -177,13 +194,14 @@ static void decode(struct sd *sd, struct demux_packet *packet)
     if (pts == MP_NOPTS_VALUE)
         MP_WARN(sd, "Subtitle with unknown start time.\n");
 
-    av_init_packet(&pkt);
-    pkt.data = packet->buffer;
-    pkt.size = packet->len;
+    mp_set_av_packet(&pkt, packet, &priv->pkt_timebase);
     int got_sub;
     int res = avcodec_decode_subtitle2(ctx, &sub, &got_sub, &pkt);
     if (res < 0 || !got_sub)
         return;
+
+    if (sub.pts != AV_NOPTS_VALUE)
+        pts = sub.pts / (double)AV_TIME_BASE;
 
     if (pts != MP_NOPTS_VALUE) {
         if (sub.end_display_time > sub.start_display_time &&
@@ -286,7 +304,7 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, double pts,
     priv->current_pts = pts;
 
     struct sub *current = NULL;
-    for (int n = MAX_QUEUE - 1; n >= 0; n--) {
+    for (int n = 0; n < MAX_QUEUE; n++) {
         struct sub *sub = &priv->subs[n];
         if (!sub->valid)
             continue;
@@ -317,11 +335,10 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, double pts,
 
     double video_par = 0;
     if (priv->avctx->codec_id == AV_CODEC_ID_DVD_SUBTITLE &&
-            opts->stretch_dvd_subs) {
+        opts->stretch_dvd_subs)
+    {
         // For DVD subs, try to keep the subtitle PAR at display PAR.
-        double par =
-              (priv->video_params.d_w / (double)priv->video_params.d_h)
-            / (priv->video_params.w   / (double)priv->video_params.h);
+        double par = priv->video_params.p_w / (double)priv->video_params.p_h;
         if (isnormal(par))
             video_par = par;
     }
@@ -401,15 +418,15 @@ static double step_sub(struct sd *sd, double now, int movement)
     struct sd_lavc_priv *priv = sd->priv;
     int best = -1;
     double target = now;
-    int direction = movement > 0 ? 1 : -1;
+    int direction = (movement > 0 ? 1 : -1) * !!movement;
 
-    if (movement == 0 || priv->num_seekpoints == 0)
+    if (priv->num_seekpoints == 0)
         return MP_NOPTS_VALUE;
 
     qsort(priv->seekpoints, priv->num_seekpoints, sizeof(priv->seekpoints[0]),
           compare_seekpoint);
 
-    while (movement) {
+    do {
         int closest = -1;
         double closest_time = 0;
         for (int i = 0; i < priv->num_seekpoints; i++) {
@@ -423,9 +440,16 @@ static double step_sub(struct sd *sd, double now, int movement)
                         closest_time = end;
                     }
                 }
-            } else {
+            } else if (direction > 0) {
                 if (start > target) {
                     if (closest < 0 || start < closest_time) {
+                        closest = i;
+                        closest_time = start;
+                    }
+                }
+            } else {
+                if (start < target) {
+                    if (closest < 0 || start >= closest_time) {
                         closest = i;
                         closest_time = start;
                     }
@@ -437,7 +461,7 @@ static double step_sub(struct sd *sd, double now, int movement)
         target = closest_time + direction;
         best = closest;
         movement -= direction;
-    }
+    } while (movement);
 
     return best < 0 ? 0 : priv->seekpoints[best].pts - now;
 }
@@ -467,7 +491,6 @@ static int control(struct sd *sd, enum sd_ctrl cmd, void *arg)
 
 const struct sd_functions sd_lavc = {
     .name = "lavc",
-    .supports_format = supports_format,
     .init = init,
     .decode = decode,
     .get_bitmaps = get_bitmaps,

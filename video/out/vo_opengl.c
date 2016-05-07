@@ -3,23 +3,18 @@
  *
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * You can alternatively redistribute this file and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdio.h>
@@ -33,7 +28,7 @@
 
 #include "config.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/common.h"
 #include "misc/bstr.h"
 #include "common/msg.h"
@@ -43,7 +38,7 @@
 #include "video/mp_image.h"
 #include "sub/osd.h"
 
-#include "opengl/common.h"
+#include "opengl/context.h"
 #include "opengl/utils.h"
 #include "opengl/hwdec.h"
 #include "opengl/osd.h"
@@ -222,7 +217,7 @@ static void call_request_hwdec_api(struct mp_hwdec_info *info,
     vo_control(vo, VOCTRL_LOAD_HWDEC_API, (void *)api_name);
 }
 
-static bool get_and_update_icc_profile(struct gl_priv *p, int *events)
+static void get_and_update_icc_profile(struct gl_priv *p, int *events)
 {
     bool has_profile = p->icc_opts->profile && p->icc_opts->profile[0];
     if (p->icc_opts->profile_auto && !has_profile) {
@@ -238,17 +233,12 @@ static bool get_and_update_icc_profile(struct gl_priv *p, int *events)
             }
 
             gl_lcms_set_memory_profile(p->cms, &icc);
+            has_profile = true;
         }
     }
 
-    struct lut3d *lut3d = NULL;
-    if (!gl_lcms_has_changed(p->cms))
-        return true;
-    if (gl_lcms_get_lut3d(p->cms, &lut3d) && !lut3d)
-        return false;
-    gl_video_set_lut3d(p->renderer, lut3d);
-    talloc_free(lut3d);
-    return true;
+    if (has_profile)
+        gl_video_update_profile(p->renderer);
 }
 
 static void get_and_update_ambient_lighting(struct gl_priv *p, int *events)
@@ -329,6 +319,8 @@ static int control(struct vo *vo, uint32_t request, void *data)
         if (screen) {
             screen->params.primaries = p->renderer_opts->target_prim;
             screen->params.gamma = p->renderer_opts->target_trc;
+            if (p->glctx->flip_v)
+                mp_image_vflip(screen);
         }
         *(struct mp_image **)data = screen;
         return true;
@@ -419,21 +411,18 @@ static int preinit(struct vo *vo)
         MP_VERBOSE(vo, "swap_control extension missing.\n");
     }
 
-    p->renderer = gl_video_init(p->gl, vo->log, vo->global);
-    if (!p->renderer)
-        goto err_out;
-    gl_video_set_osd_source(p->renderer, vo->osd);
-    gl_video_set_output_depth(p->renderer, p->glctx->depth_r, p->glctx->depth_g,
-                              p->glctx->depth_b);
-    gl_video_set_options(p->renderer, p->renderer_opts);
-    gl_video_configure_queue(p->renderer, vo);
-
     p->cms = gl_lcms_init(p, vo->log, vo->global);
     if (!p->cms)
         goto err_out;
-    gl_lcms_set_options(p->cms, p->icc_opts);
-    if (!get_and_update_icc_profile(p, &(int){0}))
+    p->renderer = gl_video_init(p->gl, vo->log, vo->global, p->cms);
+    if (!p->renderer)
         goto err_out;
+    gl_video_set_osd_source(p->renderer, vo->osd);
+    gl_video_set_options(p->renderer, p->renderer_opts);
+    gl_video_configure_queue(p->renderer, vo);
+
+    gl_lcms_set_options(p->cms, p->icc_opts);
+    get_and_update_icc_profile(p, &(int){0});
 
     p->hwdec_info.load_api = call_request_hwdec_api;
     p->hwdec_info.load_api_ctx = vo;

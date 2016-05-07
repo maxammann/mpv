@@ -27,7 +27,7 @@
 #include <libavutil/intreadwrite.h>
 #include <libavutil/pixdesc.h>
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "config.h"
 #include "common/msg.h"
 #include "options/options.h"
@@ -41,6 +41,7 @@
 #include "video/img_format.h"
 #include "video/filter/vf.h"
 #include "video/decode/dec_video.h"
+#include "demux/demux.h"
 #include "demux/stheader.h"
 #include "demux/packet.h"
 #include "video/csputils.h"
@@ -123,8 +124,11 @@ extern const struct vd_lavc_hwdec mp_vd_lavc_vdpau;
 extern const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox;
 extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi;
 extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy;
+extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
+extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_rpi;
+extern const struct vd_lavc_hwdec mp_vd_lavc_mediacodec;
 
 static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #if HAVE_RPI
@@ -141,7 +145,14 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
     &mp_vd_lavc_vaapi_copy,
 #endif
 #if HAVE_DXVA2_HWACCEL
+    &mp_vd_lavc_dxva2,
     &mp_vd_lavc_dxva2_copy,
+#endif
+#if HAVE_D3D11VA_HWACCEL
+    &mp_vd_lavc_d3d11va_copy,
+#endif
+#if HAVE_ANDROID
+    &mp_vd_lavc_mediacodec,
 #endif
     NULL
 };
@@ -203,12 +214,12 @@ const struct hwdec_profile_entry *hwdec_find_profile(
 }
 
 // Check codec support, without checking the profile.
-bool hwdec_check_codec_support(const char *decoder,
+bool hwdec_check_codec_support(const char *codec,
                                const struct hwdec_profile_entry *table)
 {
-    enum AVCodecID codec = mp_codec_to_av_codec_id(decoder);
+    enum AVCodecID codecid = mp_codec_to_av_codec_id(codec);
     for (int n = 0; table[n].av_codec; n++) {
-        if (table[n].av_codec == codec)
+        if (table[n].av_codec == codecid)
             return true;
     }
     return false;
@@ -229,17 +240,17 @@ void hwdec_request_api(struct mp_hwdec_info *info, const char *api_name)
 }
 
 static int hwdec_probe(struct vd_lavc_hwdec *hwdec, struct mp_hwdec_info *info,
-                       const char *decoder)
+                       const char *codec)
 {
     int r = 0;
     if (hwdec->probe)
-        r = hwdec->probe(hwdec, info, decoder);
+        r = hwdec->probe(hwdec, info, codec);
     return r;
 }
 
 static struct vd_lavc_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
                                          enum hwdec_type api,
-                                         const char *decoder)
+                                         const char *codec)
 {
     MP_VERBOSE(vd, "Probing '%s'...\n", m_opt_choice_str(mp_hwdec_names, api));
     struct vd_lavc_hwdec *hwdec = find_hwcodec(api);
@@ -247,7 +258,7 @@ static struct vd_lavc_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
         MP_VERBOSE(vd, "Requested hardware decoder not compiled.\n");
         return NULL;
     }
-    int r = hwdec_probe(hwdec, vd->hwdec_info, decoder);
+    int r = hwdec_probe(hwdec, vd->hwdec_info, codec);
     if (r == HWDEC_ERR_EMULATED) {
         if (autoprobe)
             return NULL;
@@ -258,8 +269,8 @@ static struct vd_lavc_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
     if (r >= 0) {
         return hwdec;
     } else if (r == HWDEC_ERR_NO_CODEC) {
-        MP_VERBOSE(vd, "Hardware decoder '%s' not found in libavcodec.\n",
-                   decoder);
+        MP_VERBOSE(vd, "Hardware decoder for '%s' with the given API not found "
+                       "in libavcodec.\n", codec);
     } else if (r == HWDEC_ERR_NO_CTX && !autoprobe) {
         MP_WARN(vd, "VO does not support requested hardware decoder, or "
                 "loading it failed.\n");
@@ -276,56 +287,43 @@ static void uninit(struct dec_video *vd)
 static bool force_fallback(struct dec_video *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
-    if (!ctx->software_fallback_decoder)
+    if (!ctx->hwdec)
         return false;
 
     uninit_avctx(vd);
     int lev = ctx->hwdec_notified ? MSGL_WARN : MSGL_V;
     mp_msg(vd->log, lev, "Falling back to software decoding.\n");
-    const char *decoder = ctx->software_fallback_decoder;
-    ctx->software_fallback_decoder = NULL;
-    init_avctx(vd, decoder, NULL);
+    init_avctx(vd, ctx->decoder, NULL);
     return true;
 }
 
-static int init(struct dec_video *vd, const char *decoder)
+static void reinit(struct dec_video *vd)
 {
-    vd_ffmpeg_ctx *ctx;
-    ctx = vd->priv = talloc_zero(NULL, vd_ffmpeg_ctx);
-    ctx->log = vd->log;
-    ctx->opts = vd->opts;
+    vd_ffmpeg_ctx *ctx = vd->priv;
+    const char *decoder = ctx->decoder;
+    const char *codec = vd->codec->codec;
 
-    if (bstr_endswith0(bstr0(decoder), "_vdpau")) {
-        MP_WARN(vd, "VDPAU decoder '%s' was requested. "
-                "This way of enabling hardware\ndecoding is not supported "
-                "anymore. Use --hwdec=vdpau instead.\nThe --hwdec-codec=... "
-                "option can be used to restrict which codecs are\nenabled, "
-                "otherwise all hardware decoding is tried for all codecs.\n",
-                decoder);
-        uninit(vd);
-        return 0;
-    }
+    uninit_avctx(vd);
 
     struct vd_lavc_hwdec *hwdec = NULL;
 
-    if (hwdec_codec_allowed(vd, decoder)) {
+    if (hwdec_codec_allowed(vd, codec)) {
         if (vd->opts->hwdec_api == HWDEC_AUTO) {
             for (int n = 0; hwdec_list[n]; n++) {
-                hwdec = probe_hwdec(vd, true, hwdec_list[n]->type, decoder);
+                hwdec = probe_hwdec(vd, true, hwdec_list[n]->type, codec);
                 if (hwdec)
                     break;
             }
         } else if (vd->opts->hwdec_api != HWDEC_NONE) {
-            hwdec = probe_hwdec(vd, false, vd->opts->hwdec_api, decoder);
+            hwdec = probe_hwdec(vd, false, vd->opts->hwdec_api, codec);
         }
     } else {
         MP_VERBOSE(vd, "Not trying to use hardware decoding: codec %s is not "
                    "on whitelist, or does not support hardware acceleration.\n",
-                   decoder);
+                   codec);
     }
 
     if (hwdec) {
-        ctx->software_fallback_decoder = talloc_strdup(ctx, decoder);
         if (hwdec->get_codec)
             decoder = hwdec->get_codec(ctx, decoder);
         MP_VERBOSE(vd, "Trying hardware decoding.\n");
@@ -334,14 +332,24 @@ static int init(struct dec_video *vd, const char *decoder)
     }
 
     init_avctx(vd, decoder, hwdec);
-    if (!ctx->avctx) {
+    if (!ctx->avctx)
         force_fallback(vd);
-        if (!ctx->avctx) {
-            uninit(vd);
-            return 0;
-        }
-    }
+}
 
+static int init(struct dec_video *vd, const char *decoder)
+{
+    vd_ffmpeg_ctx *ctx;
+    ctx = vd->priv = talloc_zero(NULL, vd_ffmpeg_ctx);
+    ctx->log = vd->log;
+    ctx->opts = vd->opts;
+    ctx->decoder = talloc_strdup(ctx, decoder);
+
+    reinit(vd);
+
+    if (!ctx->avctx) {
+        uninit(vd);
+        return 0;
+    }
     return 1;
 }
 
@@ -351,7 +359,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     vd_ffmpeg_ctx *ctx = vd->priv;
     struct vd_lavc_params *lavc_param = vd->opts->vd_lavc_params;
     bool mp_rawvideo = false;
-    struct sh_stream *sh = vd->header;
+    struct mp_codec_params *c = vd->codec;
 
     assert(!ctx->avctx);
 
@@ -365,6 +373,10 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
         return;
 
     ctx->hwdec_info = vd->hwdec_info;
+
+    ctx->codec_timebase = (AVRational){0};
+    if (strstr(decoder, "_mmal") || strstr(decoder, "_mediacodec"))
+        ctx->codec_timebase = (AVRational){1, 1000000};
 
     ctx->pix_fmt = AV_PIX_FMT_NONE;
     ctx->hwdec = hwdec;
@@ -389,6 +401,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
             avctx->get_buffer2 = get_buffer2_hwdec;
         if (ctx->hwdec->init(ctx) < 0)
             goto error;
+        ctx->max_delay_queue = ctx->hwdec->delay_queue;
     } else {
         mp_set_avcodec_threads(vd->log, avctx, lavc_param->threads);
     }
@@ -414,23 +427,22 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     // Do this after the above avopt handling in case it changes values
     ctx->skip_frame = avctx->skip_frame;
 
-    avctx->codec_tag = sh->codec_tag;
-    avctx->coded_width  = sh->video->disp_w;
-    avctx->coded_height = sh->video->disp_h;
-    avctx->bits_per_coded_sample = sh->video->bits_per_coded_sample;
+    avctx->codec_tag = c->codec_tag;
+    avctx->coded_width  = c->disp_w;
+    avctx->coded_height = c->disp_h;
+    avctx->bits_per_coded_sample = c->bits_per_coded_sample;
 
-    mp_lavc_set_extradata(avctx, sh->extradata, sh->extradata_size);
+    mp_lavc_set_extradata(avctx, c->extradata, c->extradata_size);
 
     if (mp_rawvideo) {
-        avctx->pix_fmt = imgfmt2pixfmt(sh->codec_tag);
+        avctx->pix_fmt = imgfmt2pixfmt(c->codec_tag);
         avctx->codec_tag = 0;
-        if (avctx->pix_fmt == AV_PIX_FMT_NONE && sh->codec_tag)
+        if (avctx->pix_fmt == AV_PIX_FMT_NONE && c->codec_tag)
             MP_ERR(vd, "Image format %s not supported by lavc.\n",
-                   mp_imgfmt_to_name(sh->codec_tag));
+                   mp_imgfmt_to_name(c->codec_tag));
     }
 
-    if (sh->lav_headers)
-        mp_copy_lav_codec_headers(avctx, sh->lav_headers);
+    mp_set_lav_codec_headers(avctx, c);
 
     /* open it */
     if (avcodec_open2(avctx, lavc_codec, NULL) < 0)
@@ -447,21 +459,33 @@ static void reset_avctx(struct dec_video *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
 
-    if (ctx->avctx)
+    if (ctx->avctx && avcodec_is_open(ctx->avctx))
         avcodec_flush_buffers(ctx->avctx);
     ctx->flushing = false;
+}
+
+static void flush_all(struct dec_video *vd)
+{
+    vd_ffmpeg_ctx *ctx = vd->priv;
+
+    for (int n = 0; n < ctx->num_delay_queue; n++)
+        talloc_free(ctx->delay_queue[n]);
+    ctx->num_delay_queue = 0;
+
+    reset_avctx(vd);
 }
 
 static void uninit_avctx(struct dec_video *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
-    AVCodecContext *avctx = ctx->avctx;
 
-    if (avctx) {
-        if (avctx->codec && avcodec_close(avctx) < 0)
+    flush_all(vd);
+    av_frame_free(&ctx->pic);
+
+    if (ctx->avctx) {
+        if (avcodec_close(ctx->avctx) < 0)
             MP_ERR(vd, "Could not close codec.\n");
-
-        av_freep(&avctx->extradata);
+        av_freep(&ctx->avctx->extradata);
     }
 
     if (ctx->hwdec && ctx->hwdec->uninit)
@@ -470,11 +494,9 @@ static void uninit_avctx(struct dec_video *vd)
 
     av_freep(&ctx->avctx);
 
-    av_frame_free(&ctx->pic);
-
-    ctx->flushing = false;
     ctx->hwdec_failed = false;
     ctx->hwdec_fail_count = 0;
+    ctx->max_delay_queue = 0;
 }
 
 static void update_image_params(struct dec_video *vd, AVFrame *frame,
@@ -482,37 +504,22 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
     struct MPOpts *opts = ctx->opts;
-    int width = frame->width;
-    int height = frame->height;
-    float aspect = av_q2d(frame->sample_aspect_ratio) * width / height;
-    int pix_fmt = frame->format;
-
-    if (pix_fmt != ctx->pix_fmt) {
-        ctx->pix_fmt = pix_fmt;
-        ctx->best_csp = pixfmt2imgfmt(pix_fmt);
-        if (!ctx->best_csp)
-            MP_ERR(vd, "lavc pixel format %s not supported.\n",
-                   av_get_pix_fmt_name(pix_fmt));
-    }
 
     *out_params = (struct mp_image_params) {
-        .imgfmt = ctx->best_csp,
-        .w = width,
-        .h = height,
-        .d_w = 0,
-        .d_h = 0,
+        .imgfmt = pixfmt2imgfmt(frame->format),
+        .w = frame->width,
+        .h = frame->height,
+        .p_w = frame->sample_aspect_ratio.num,
+        .p_h = frame->sample_aspect_ratio.den,
         .colorspace = avcol_spc_to_mp_csp(ctx->avctx->colorspace),
         .colorlevels = avcol_range_to_mp_csp_levels(ctx->avctx->color_range),
         .primaries = avcol_pri_to_mp_csp_prim(ctx->avctx->color_primaries),
         .gamma = avcol_trc_to_mp_csp_trc(ctx->avctx->color_trc),
         .chroma_location =
             avchroma_location_to_mp(ctx->avctx->chroma_sample_location),
-        .rotate = vd->header->video->rotate,
-        .stereo_in = vd->header->video->stereo_mode,
+        .rotate = vd->codec->rotate,
+        .stereo_in = vd->codec->stereo_mode,
     };
-
-    if (aspect > 0)
-        vf_set_dar(&out_params->d_w, &out_params->d_h, width, height, aspect);
 
     if (opts->video_rotate < 0) {
         out_params->rotate = 0;
@@ -532,6 +539,12 @@ static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
     for (int i = 0; fmt[i] != AV_PIX_FMT_NONE; i++)
         MP_VERBOSE(vd, " %s", av_get_pix_fmt_name(fmt[i]));
     MP_VERBOSE(vd, "\n");
+
+#if HAVE_AVCODEC_PROFILE_NAME
+    const char *profile = avcodec_profile_name(avctx->codec_id, avctx->profile);
+    MP_VERBOSE(vd, "Codec profile: %s (0x%x)\n", profile ? profile : "unknown",
+               avctx->profile);
+#endif
 
     assert(ctx->hwdec);
 
@@ -581,7 +594,7 @@ static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags)
     vd_ffmpeg_ctx *ctx = vd->priv;
 
     int imgfmt = pixfmt2imgfmt(pic->format);
-    if (!IMGFMT_IS_HWACCEL(imgfmt) || !ctx->hwdec)
+    if (!ctx->hwdec || ctx->hwdec_fmt != imgfmt)
         ctx->hwdec_failed = true;
 
     /* Hardware decoding failed, and we will trigger a proper fallback later
@@ -614,6 +627,22 @@ static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags)
     return 0;
 }
 
+static struct mp_image *read_output(struct dec_video *vd)
+{
+    vd_ffmpeg_ctx *ctx = vd->priv;
+
+    if (!ctx->num_delay_queue)
+        return NULL;
+
+    struct mp_image *res = ctx->delay_queue[0];
+    MP_TARRAY_REMOVE_AT(ctx->delay_queue, ctx->num_delay_queue, 0);
+
+    if (ctx->hwdec && ctx->hwdec->process_image)
+        res = ctx->hwdec->process_image(ctx, res);
+
+    return mp_img_swap_to_native(res);
+}
+
 static void decode(struct dec_video *vd, struct demux_packet *packet,
                    int flags, struct mp_image **out_image)
 {
@@ -622,6 +651,7 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
     vd_ffmpeg_ctx *ctx = vd->priv;
     AVCodecContext *avctx = ctx->avctx;
     struct vd_lavc_params *opts = ctx->opts->vd_lavc_params;
+    bool consumed = false;
     AVPacket pkt;
 
     if (!avctx)
@@ -635,7 +665,7 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
         avctx->skip_frame = ctx->skip_frame;
     }
 
-    mp_set_av_packet(&pkt, packet, NULL);
+    mp_set_av_packet(&pkt, packet, &ctx->codec_timebase);
     ctx->flushing |= !pkt.data;
 
     // Reset decoder if hw state got reset, or new data comes during flushing.
@@ -643,7 +673,23 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
         reset_avctx(vd);
 
     hwdec_lock(ctx);
+#if HAVE_AVCODEC_NEW_CODEC_API
+    ret = avcodec_send_packet(avctx, packet ? &pkt : NULL);
+    if (ret >= 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        if (ret >= 0)
+            consumed = true;
+        ret = avcodec_receive_frame(avctx, ctx->pic);
+        if (ret >= 0)
+            got_picture = 1;
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            ret = 0;
+    } else {
+        consumed = true;
+    }
+#else
     ret = avcodec_decode_video2(avctx, ctx->pic, &got_picture, &pkt);
+    consumed = true;
+#endif
     hwdec_unlock(ctx);
 
     // Reset decoder if it was fully flushed. Caller might send more flush
@@ -658,6 +704,8 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
             if (ctx->hwdec_fail_count >= opts->software_fallback)
                 ctx->hwdec_failed = true;
         }
+        if (!ctx->hwdec_failed && packet)
+            packet->len = 0; // skip failed packet
         return;
     }
 
@@ -666,28 +714,46 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
         return;
     }
 
+    if (packet && consumed)
+        packet->len = 0;
+
     // Skipped frame, or delayed output due to multithreaded decoding.
-    if (!got_picture)
+    if (!got_picture) {
+        if (!packet)
+            *out_image = read_output(vd);
         return;
+    }
 
     ctx->hwdec_fail_count = 0;
 
-    struct mp_image_params params;
-    update_image_params(vd, ctx->pic, &params);
-    vd->codec_pts = mp_pts_from_av(ctx->pic->pkt_pts, NULL);
-    vd->codec_dts = mp_pts_from_av(ctx->pic->pkt_dts, NULL);
+    AVFrameSideData *sd = NULL;
+    sd = av_frame_get_side_data(ctx->pic, AV_FRAME_DATA_A53_CC);
+    if (sd) {
+        struct demux_packet *cc = new_demux_packet_from(sd->data, sd->size);
+        cc->pts = vd->codec_pts;
+        cc->dts = vd->codec_dts;
+        cc->pos = -1;
+        demuxer_feed_caption(vd->header, cc);
+    }
 
     struct mp_image *mpi = mp_image_from_av_frame(ctx->pic);
-    av_frame_unref(ctx->pic);
-    if (!mpi)
+    if (!mpi) {
+        av_frame_unref(ctx->pic);
         return;
+    }
     assert(mpi->planes[0] || mpi->planes[3]);
+    mpi->pts = mp_pts_from_av(ctx->pic->pkt_pts, &ctx->codec_timebase);
+    mpi->dts = mp_pts_from_av(ctx->pic->pkt_dts, &ctx->codec_timebase);
+
+    struct mp_image_params params;
+    update_image_params(vd, ctx->pic, &params);
     mp_image_set_params(mpi, &params);
 
-    if (ctx->hwdec && ctx->hwdec->process_image)
-        mpi = ctx->hwdec->process_image(ctx, mpi);
+    av_frame_unref(ctx->pic);
 
-    *out_image = mp_img_swap_to_native(mpi);
+    MP_TARRAY_APPEND(ctx, ctx->delay_queue, ctx->num_delay_queue, mpi);
+    if (ctx->num_delay_queue > ctx->max_delay_queue)
+        *out_image = read_output(vd);
 }
 
 static struct mp_image *decode_with_fallback(struct dec_video *vd,
@@ -723,32 +789,28 @@ static int control(struct dec_video *vd, int cmd, void *arg)
     vd_ffmpeg_ctx *ctx = vd->priv;
     switch (cmd) {
     case VDCTRL_RESET:
-        reset_avctx(vd);
+        flush_all(vd);
         return CONTROL_TRUE;
-    case VDCTRL_QUERY_UNSEEN_FRAMES: {
+    case VDCTRL_GET_BFRAMES: {
         AVCodecContext *avctx = ctx->avctx;
         if (!avctx)
             break;
         if (ctx->hwdec && ctx->hwdec->type == HWDEC_RPI)
             break; // MMAL has arbitrary buffering, thus unknown
-        int delay = avctx->has_b_frames;
-        assert(delay >= 0);
-        if (avctx->active_thread_type & FF_THREAD_FRAME)
-            delay += avctx->thread_count - 1;
-        *(int *)arg = delay;
+        *(int *)arg = avctx->has_b_frames;
         return CONTROL_TRUE;
     }
     case VDCTRL_GET_HWDEC: {
-        int hwdec = ctx->hwdec ? ctx->hwdec->type : 0;
-        if (!ctx->software_fallback_decoder)
-            hwdec = 0;
-        *(int *)arg = hwdec;
+        *(int *)arg = ctx->hwdec ? ctx->hwdec->type : 0;
         return CONTROL_TRUE;
     }
     case VDCTRL_FORCE_HWDEC_FALLBACK:
         if (force_fallback(vd))
             return ctx->avctx ? CONTROL_OK : CONTROL_ERROR;
         return CONTROL_FALSE;
+    case VDCTRL_REINIT:
+        reinit(vd);
+        return CONTROL_TRUE;
     }
     return CONTROL_UNKNOWN;
 }

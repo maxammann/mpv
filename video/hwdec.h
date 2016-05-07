@@ -13,8 +13,11 @@ enum hwdec_type {
     HWDEC_VIDEOTOOLBOX = 3,
     HWDEC_VAAPI = 4,
     HWDEC_VAAPI_COPY = 5,
-    HWDEC_DXVA2_COPY = 6,
-    HWDEC_RPI = 7,
+    HWDEC_DXVA2 = 6,
+    HWDEC_DXVA2_COPY = 7,
+    HWDEC_D3D11VA_COPY = 8,
+    HWDEC_RPI = 9,
+    HWDEC_MEDIACODEC = 10,
 };
 
 // hwdec_type names (options.c)
@@ -29,6 +32,7 @@ struct mp_hwdec_ctx {
     struct mp_vdpau_ctx *vdpau_ctx;
     struct mp_vaapi_ctx *vaapi_ctx;
     struct mp_d3d_ctx *d3d_ctx;
+    uint32_t (*get_vt_fmt)(struct mp_hwdec_ctx *ctx);
 
     // Optional.
     // Allocates a software image from the pool, downloads the hw image from

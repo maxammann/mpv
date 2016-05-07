@@ -418,7 +418,7 @@ List of Input Commands
 
     <reselect> (default)
         Select the default audio and subtitle streams, which typically selects
-        external files with highest preference. (The implementation is not
+        external files with the highest preference. (The implementation is not
         perfect, and could be improved on request.)
 
     <keep-selection>
@@ -546,6 +546,12 @@ Input Commands that are Possibly Subject to Change
         Always bind a key. (The input section that was made active most recently
         wins if there are ambiguities.)
 
+    This command can be used to dispatch arbitrary keys to a script or a client
+    API user. If the input section defines ``script-binding`` commands, it is
+    also possible to get separate events on key up/down, and relatively detailed
+    information about the key state. The special key name ``unmapped`` can be
+    used to match any unmapped key.
+
 ``overlay-add <id> <x> <y> "<file>" <offset> "<fmt>" <w> <h> <stride>``
     Add an OSD overlay sourced from raw data. This might be useful for scripts
     and applications controlling mpv, and which want to display things on top
@@ -647,14 +653,20 @@ Input Commands that are Possibly Subject to Change
     For completeness, here is how this command works internally. The details
     could change any time. On any matching key event, ``script_message_to``
     or ``script_message`` is called (depending on whether the script name is
-    included), where the first argument is the string ``key-binding``, the
-    second argument is the name of the binding, and the third argument is the
-    key state as string. The key state consists of a number of letters. The
-    first letter is one of ``d`` (key was pressed down), ``u`` (was released),
-    ``r`` (key is still down, and was repeated; only if key repeat is enabled
-    for this binding), ``p`` (key was pressed; happens if up/down can't be
-    tracked). The second letter whether the event originates from the mouse,
-    either ``m`` (mouse button) or ``-`` (something else).
+    included), with the following arguments:
+
+    1. The string ``key-binding``.
+    2. The name of the binding (as established above).
+    3. The key state as string (see below).
+    4. The key name (since mpv 0.15.0).
+
+    The key state consists of 2 letters:
+
+    1. One of ``d`` (key was pressed down), ``u`` (was released), ``r`` (key
+       is still down, and was repeated; only if key repeat is enabled for this
+       binding), ``p`` (key was pressed; happens if up/down can't be tracked).
+    2. Whether the event originates from the mouse, either ``m`` (mouse button)
+       or ``-`` (something else).
 
 ``ab-loop``
     Cycle through A-B loop states. The first command will set the ``A`` point
@@ -681,6 +693,18 @@ Input Commands that are Possibly Subject to Change
     is the LSB). The contents of the padding ``X`` is undefined. The ``data``
     field is of type MPV_FORMAT_BYTE_ARRAY with the actual image data. The image
     is freed as soon as the result node is freed.
+
+``vf-command "<label>" "<cmd>" "<args>"``
+    Send a command to the filter with the given ``<label>``. Use ``all`` to send
+    it to all filters at once. The command and argument string is filter
+    specific. Currently, this only works with the ``lavfi`` filter - see
+    the libavfilter documentation for which commands a filter supports.
+
+    Note that the ``<label>`` is a mpv filter label, not a libavfilter filter
+    name.
+
+``af-command "<label>" "<cmd>" "<args>"``
+    Same as ``vf-command``, but for audio filters.
 
 Undocumented commands: ``tv-last-channel`` (TV/DVB only),
 ``ao-reload`` (experimental/internal).
@@ -741,6 +765,17 @@ The following hooks are currently defined:
     ``file-local-options/<option name>``. The player will wait until all
     hooks are run.
 
+``on_preloaded``
+    Called after a file has been opened, and before tracks are selected and
+    decoders are created. This has some usefulness if an API users wants
+    to select tracks manually, based on the set of available tracks. It's
+    also useful to initialize ``--lavfi-complex`` in a specific way by API,
+    without having to "probe" the available streams at first.
+
+    Note that this does not yet apply default track selection. Which operations
+    exactly can be done and not be done, and what information is available and
+    what is not yet available yet, is all subject to change.
+
 ``on_unload``
     Run before closing a file, and before actually uninitializing
     everything. It's not possible to resume playback in this state.
@@ -782,7 +817,7 @@ Input sections group a set of bindings, and enable or disable them at once.
 In ``input.conf``, each key binding is assigned to an input section, rather
 than actually having explicit text sections.
 
-Also see ``enable_section`` and ``disable_section`` commands.
+See also: ``enable_section`` and ``disable_section`` commands.
 
 Predefined bindings:
 
@@ -886,8 +921,9 @@ Property list
     useless. It looks like this can be different from ``path`` only when
     using e.g. ordered chapters.)
 
-``stream-pos`` (RW)
-    Raw byte position in source stream.
+``stream-pos``
+    Raw byte position in source stream. Technically, this returns the position
+    of the most recent packet passed to a decoder.
 
 ``stream-end``
     Raw end position in bytes in source stream.
@@ -961,9 +997,8 @@ Property list
 ``playback-time`` (RW)
     Position in current file in seconds. Unlike ``time-pos``, the time is
     clamped to the range of the file. (Inaccurate file durations etc. could
-    make it go out of range. Also helpful when the user attempts to seek
-    outside of the file, as the seek target time is considered the current
-    position during seeking.)
+    make it go out of range. Useful on attempts to seek outside of the file,
+    as the seek target time is considered the current position during seeking.)
 
 ``chapter`` (RW)
     Current chapter number. The number of the first chapter is 0.
@@ -1109,13 +1144,13 @@ Property list
 
 ``vf-metadata/<filter-label>``
     Metadata added by video filters. Accessed by the filter label,
-    which if not explicitly specified using the ``@filter-label:`` syntax,
+    which, if not explicitly specified using the ``@filter-label:`` syntax,
     will be ``<filter-name>NN``.
 
     Works similar to ``metadata`` property. It allows the same access
     methods (using sub-properties).
 
-    An example of these kind of metadata are the cropping parameters
+    An example of this kind of metadata are the cropping parameters
     added by ``--vf=lavfi=cropdetect``.
 
 ``af-metadata/<filter-label>``
@@ -1142,7 +1177,7 @@ Property list
 
 ``cache-size`` (RW)
     Network cache size in KB. This is similar to ``--cache``. This allows
-    to set the cache size at runtime. Currently, it's not possible to enable
+    setting the cache size at runtime. Currently, it's not possible to enable
     or disable the cache at runtime using this property, just to resize an
     existing cache.
 
@@ -1159,6 +1194,11 @@ Property list
 
 ``cache-used`` (R)
     Total used cache size in KB.
+
+``cache-speed`` (R)
+    Current I/O read speed between the cache and the lower layer (like network).
+    This gives the number bytes per seconds over a 1 second window (using
+    the type ``MPV_FORMAT_INT64`` for the client API).
 
 ``cache-idle`` (R)
     Returns ``yes`` if the cache is idle, which means the cache is filled as
@@ -1201,11 +1241,30 @@ Property list
 ``hr-seek`` (RW)
     See ``--hr-seek``.
 
+``mixer-active``
+    Return ``yes`` if the audio mixer is active, ``no`` otherwise. This has
+    implications for ``--softvol=no`` mode: if the mixer is inactive, changing
+    ``volume`` doesn't actually change anything on the system mixer. If the
+    ``--volume`` or ``--mute`` option are used, these might not be applied
+    properly until the mixer becomes active either. (The options, if set, will
+    just overwrite the mixer state at audio initialization.)
+
+    While the behavior with ``mixer-active==yes`` is relatively well-defined,
+    the ``no`` case will provide possibly wrong or insignificant values.
+
+    Note that an active mixer does not necessarily imply active audio output,
+    although this is implied in the current implementation.
+
 ``volume`` (RW)
-    Current volume (see ``--volume`` for details).
+    Current volume (see ``--volume`` for details). Also see ``mixer-active``
+    property.
+
+``volume-max``
+    Current maximum value the volume property can be set to. (This may depend
+    on the ``--softvol-max`` option.)
 
 ``mute`` (RW)
-    Current mute status (``yes``/``no``).
+    Current mute status (``yes``/``no``). Also see ``mixer-active`` property.
 
 ``audio-delay`` (RW)
     See ``--audio-delay``.
@@ -1531,6 +1590,15 @@ Property list
 ``program`` (W)
     Switch TS program (write-only).
 
+``dvb-channel`` (W)
+    Pair of integers: card,channel of current DVB stream.
+    Can be switched to switch to another channel on the same card. 
+
+``dvb-channel-name`` (RW)
+    Name of current DVB program.
+    On write, a channel-switch to the named channel on the same
+    card is performed. Can also be used for channel switching. 
+
 ``sid`` (RW)
     Current subtitle track (similar to ``--sid``).
 
@@ -1645,10 +1713,6 @@ Property list
     ``track-list/N/lang``
         Track language as identified by the file. Not always available.
 
-    ``track-list/N/audio-channels``
-        For audio tracks, the number of audio channels in the audio stream.
-        Not always accurate (depends on container hints). Not always available.
-
     ``track-list/N/albumart``
         ``yes`` if this is a video track that consists of a single picture,
         ``no`` or unavailable otherwise. This is used for video tracks that are
@@ -1684,6 +1748,29 @@ Property list
         match even if the default (builtin) demuxer is used, but there is
         no hard guarantee.
 
+    ``track-list/N/decoder-desc``
+        If this track is being decoded, the human-readable decoder name,
+
+    ``track-list/N/demux-w``, ``track-list/N/demux-h``
+        Video size hint as indicated by the container. (Not always accurate.)
+
+    ``track-list/N/demux-channel-count``
+        Number of audio channels as indicated by the container. (Not always
+        accurate - in particular, the track could be decoded as a different
+        number of channels.)
+
+    ``track-list/N/demux-channels``
+        Channel layout as indicated by the container. (Not always accurate.)
+
+    ``track-list/N/demux-samplerate``
+        Audio sample rate as indicated by the container. (Not always accurate.)
+
+    ``track-list/N/demux-fps``
+        Video FPS as indicated by the container. (Not always accurate.)
+
+    ``track-list/N/audio-channels`` (deprecated)
+        Deprecated alias for ``track-list/N/demux-channel-count``.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1697,13 +1784,20 @@ Property list
                 "src-id"            MPV_FORMAT_INT64
                 "title"             MPV_FORMAT_STRING
                 "lang"              MPV_FORMAT_STRING
-                "audio-channels"    MPV_FORMAT_INT64
                 "albumart"          MPV_FORMAT_FLAG
                 "default"           MPV_FORMAT_FLAG
                 "forced"            MPV_FORMAT_FLAG
                 "external"          MPV_FORMAT_FLAG
                 "external-filename" MPV_FORMAT_STRING
                 "codec"             MPV_FORMAT_STRING
+                "decoder-desc"      MPV_FORMAT_STRING
+                "demux-w"           MPV_FORMAT_INT64
+                "demux-h"           MPV_FORMAT_INT64
+                "demux-channel-count" MPV_FORMAT_INT64
+                "demux-channels"    MPV_FORMAT_STRING
+                "demux-samplerate"  MPV_FORMAT_INT64
+                "demux-fps"         MPV_FORMAT_DOUBLE
+                "audio-channels"    MPV_FORMAT_INT64
 
 ``chapter-list``
     List of chapters, current entry marked. Currently, the raw property value
@@ -1756,6 +1850,9 @@ Property list
 
 ``video-rotate`` (RW)
     See ``--video-rotate`` option.
+
+``video-stereo-mode`` (RW)
+    See ``--video-stereo-mode`` option.
 
 ``seekable``
     Return whether it's generally possible to seek in the current file.
@@ -1900,6 +1997,43 @@ Property list
     In some cases, the protocol will not actually be supported (consider
     ``https`` if ffmpeg is not compiled with TLS support).
 
+``decoder-list``
+    List of decoders supported. This lists decoders which can be passed to
+    ``--vd`` and ``--ad``.
+
+    ``family``
+        Decoder driver. Usually ``lavc`` for libavcodec.
+
+    ``codec``
+        Canonical codec name, which identifies the format the decoder can
+        handle.
+
+    ``driver``
+        The name of the decoder itself. Often, this is the same as ``codec``.
+        Sometimes it can be different. It is used to distinguish multiple
+        decoders for the same codec.
+
+    ``description``
+        Human readable description of the decoder and codec.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``,
+    or with Lua ``mp.get_property_native``, this will return a mpv_node with
+    the following contents:
+
+    ::
+
+        MPV_FORMAT_NODE_ARRAY
+            MPV_FORMAT_NODE_MAP (for each decoder entry)
+                "family"        MPV_FORMAT_STRING
+                "codec"         MPV_FORMAT_STRING
+                "driver"        MPV_FORMAT_STRING
+                "description"   MPV_FORMAT_STRING
+
+``encoder-list``
+    List of libavcodec encoders. This has the same format as ``decoder-list``.
+    The encoder names (``driver`` entries) can be passed to ``--ovc`` and
+    ``--oac`` (without the ``lavc:`` prefix required by ``--vd`` and ``--ad``).
+
 ``mpv-version``
     Return the mpv version/copyright string. Depending on how the binary was
     built, it might contain either a release version, or just a git hash.
@@ -1907,6 +2041,13 @@ Property list
 ``mpv-configuration``
     Return the configuration arguments which were passed to the build system
     (typically the way ``./waf configure ...`` was invoked).
+
+``ffmpeg-version``
+    Return the contents of the ``av_version_info()`` API call. This is a string
+    which identifies the build in some way, either through a release version
+    number, or a git hash. This applies to Libav as well (the property is
+    still named the same.) This property is unavailable if mpv is linked against
+    older FFmpeg and Libav versions.
 
 ``options/<name>`` (RW)
     Read-only access to value of option ``--<name>``. Most options can be

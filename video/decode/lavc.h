@@ -9,19 +9,25 @@
 #include "video/mp_image.h"
 #include "video/hwdec.h"
 
+#define HWDEC_DELAY_QUEUE_COUNT 2
+
 typedef struct lavc_ctx {
     struct mp_log *log;
     struct MPOpts *opts;
     AVCodecContext *avctx;
     AVFrame *pic;
     struct vd_lavc_hwdec *hwdec;
+    AVRational codec_timebase;
     enum AVPixelFormat pix_fmt;
-    int best_csp;
     enum AVDiscard skip_frame;
     bool flushing;
-    const char *software_fallback_decoder;
+    const char *decoder;
     bool hwdec_failed;
     bool hwdec_notified;
+
+    struct mp_image **delay_queue;
+    int num_delay_queue;
+    int max_delay_queue;
 
     // From VO
     struct mp_hwdec_info *hwdec_info;
@@ -43,8 +49,13 @@ struct vd_lavc_hwdec {
     // If not-0: the IMGFMT_ format that should be accepted in the libavcodec
     // get_format callback.
     int image_format;
+    // Setting this will queue the given number of frames before calling
+    // process_image() or returning them to the renderer. This can increase
+    // efficiency by not blocking on the hardware pipeline by reading back
+    // immediately after decoding.
+    int delay_queue;
     int (*probe)(struct vd_lavc_hwdec *hwdec, struct mp_hwdec_info *info,
-                 const char *decoder);
+                 const char *codec);
     int (*init)(struct lavc_ctx *ctx);
     int (*init_decoder)(struct lavc_ctx *ctx, int w, int h);
     void (*uninit)(struct lavc_ctx *ctx);
@@ -74,7 +85,7 @@ struct hwdec_profile_entry {
 
 const struct hwdec_profile_entry *hwdec_find_profile(
     struct lavc_ctx *ctx, const struct hwdec_profile_entry *table);
-bool hwdec_check_codec_support(const char *decoder,
+bool hwdec_check_codec_support(const char *codec,
                                const struct hwdec_profile_entry *table);
 int hwdec_get_max_refs(struct lavc_ctx *ctx);
 

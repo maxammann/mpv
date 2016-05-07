@@ -44,6 +44,7 @@ struct mpv_global;
 struct mp_osd_res;
 struct osd_style_opts;
 
+void mp_ass_flush_old_events(ASS_Track *track, long long ts);
 void mp_ass_set_style(ASS_Style *style, double res_y,
                       const struct osd_style_opts *opts);
 
@@ -54,7 +55,7 @@ ASS_Library *mp_ass_init(struct mpv_global *global, struct mp_log *log);
 struct sub_bitmap;
 struct sub_bitmaps;
 void mp_ass_render_frame(ASS_Renderer *renderer, ASS_Track *track, double time,
-                         struct sub_bitmap **parts, struct sub_bitmaps *res);
+                         struct sub_bitmaps *res);
 
 #endif                          /* HAVE_LIBASS */
 #endif                          /* MPLAYER_ASS_MP_H */

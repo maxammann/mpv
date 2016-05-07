@@ -1,23 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * You can alternatively redistribute this file and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -97,7 +92,7 @@ struct mpgl_osd {
     int64_t change_counter;
     // temporary
     int stereo_mode;
-    int display_size[2];
+    struct mp_osd_res osd_res;
     void *scratch;
 };
 
@@ -387,8 +382,8 @@ void mpgl_osd_draw_part(struct mpgl_osd *ctx, int vp_w, int vp_h, int index)
             struct gl_transform t;
             gl_transform_ortho(&t, 0, vp_w, 0, vp_h);
 
-            float a_x = ctx->display_size[0] * x;
-            float a_y = ctx->display_size[1] * y;
+            float a_x = ctx->osd_res.w * x;
+            float a_y = ctx->osd_res.h * y;
             t.t[0] += a_x * t.m[0][0] + a_y * t.m[1][0];
             t.t[1] += a_x * t.m[0][1] + a_y * t.m[1][1];
 
@@ -408,20 +403,25 @@ struct gl_vao *mpgl_osd_get_vao(struct mpgl_osd *ctx)
     return &ctx->vao;
 }
 
+static void set_res(struct mpgl_osd *ctx, struct mp_osd_res res, int stereo_mode)
+{
+    int div[2];
+    get_3d_side_by_side(stereo_mode, div);
+
+    res.w /= div[0];
+    res.h /= div[1];
+    ctx->osd_res = res;
+}
+
 void mpgl_osd_generate(struct mpgl_osd *ctx, struct mp_osd_res res, double pts,
                        int stereo_mode, int draw_flags)
 {
     for (int n = 0; n < MAX_OSD_PARTS; n++)
         ctx->parts[n]->num_subparts = 0;
 
-    int div[2];
-    get_3d_side_by_side(stereo_mode, div);
+    set_res(ctx, res, stereo_mode);
 
-    struct mp_osd_res s_res = res;
-    ctx->display_size[0] = s_res.w = s_res.w / div[0];
-    ctx->display_size[1] = s_res.h = s_res.h / div[1];
-
-    osd_draw(ctx->osd, s_res, pts, draw_flags, ctx->formats, gen_osd_cb, ctx);
+    osd_draw(ctx->osd, ctx->osd_res, pts, draw_flags, ctx->formats, gen_osd_cb, ctx);
     ctx->stereo_mode = stereo_mode;
 
     // Parts going away does not necessarily result in gen_osd_cb() being called
@@ -432,6 +432,13 @@ void mpgl_osd_generate(struct mpgl_osd *ctx, struct mp_osd_res res, double pts,
             ctx->change_counter += 1;
         part->prev_num_subparts = part->num_subparts;
     }
+}
+
+// See osd_resize() for remarks. This function is an optional optimization too.
+void mpgl_osd_resize(struct mpgl_osd *ctx, struct mp_osd_res res, int stereo_mode)
+{
+    set_res(ctx, res, stereo_mode);
+    osd_resize(ctx->osd, ctx->osd_res);
 }
 
 int64_t mpgl_get_change_counter(struct mpgl_osd *ctx)

@@ -21,6 +21,7 @@
 #include <assert.h>
 
 #include "common/common.h"
+#include "common/global.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
 #include "input/input.h"
@@ -147,6 +148,7 @@ void mp_clients_init(struct MPContext *mpctx)
     *mpctx->clients = (struct mp_client_api) {
         .mpctx = mpctx,
     };
+    mpctx->global->client_api = mpctx->clients;
     pthread_mutex_init(&mpctx->clients->lock, NULL);
 }
 
@@ -272,6 +274,11 @@ struct mp_log *mp_client_get_log(struct mpv_handle *ctx)
 struct MPContext *mp_client_get_core(struct mpv_handle *ctx)
 {
     return ctx->mpctx;
+}
+
+struct MPContext *mp_client_api_get_core(struct mp_client_api *api)
+{
+    return api->mpctx;
 }
 
 static void wakeup_client(struct mpv_handle *ctx)
@@ -461,7 +468,7 @@ void mpv_terminate_destroy(mpv_handle *ctx)
 static bool check_locale(void)
 {
     char *name = setlocale(LC_NUMERIC, NULL);
-    return strcmp(name, "C") == 0;
+    return !name || strcmp(name, "C") == 0;
 }
 
 mpv_handle *mpv_create(void)
@@ -836,8 +843,10 @@ static bool conv_node_to_format(void *dst, mpv_format dst_fmt, mpv_node *src)
         return true;
     }
     if (dst_fmt == MPV_FORMAT_INT64 && src->format == MPV_FORMAT_DOUBLE) {
-        if (src->u.double_ >= INT64_MIN && src->u.double_ <= INT64_MAX)
+        if (src->u.double_ >= INT64_MIN && src->u.double_ <= INT64_MAX) {
             *(int64_t *)dst = src->u.double_;
+            return true;
+        }
     }
     return false;
 }

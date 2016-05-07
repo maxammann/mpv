@@ -42,7 +42,7 @@
 #include <X11/extensions/Xvlib.h>
 
 #include "options/options.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/msg.h"
 #include "vo.h"
 #include "video/mp_image.h"
@@ -843,6 +843,9 @@ static int preinit(struct vo *vo)
     ctx->fo = XvListImageFormats(x11->display, ctx->xv_port,
                                  (int *) &ctx->formats);
 
+    MP_WARN(vo, "Warning: this legacy VO has bad quality and performance, "
+                "and will in particular result in blurry OSD and subtitles. "
+                "You should fix your graphic drivers, or not force the xv VO.\n");
     return 0;
 
   error:

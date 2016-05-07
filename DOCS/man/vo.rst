@@ -444,13 +444,15 @@ Available video output drivers are:
         Disable the scaler if the video image is not resized. In that case,
         ``bilinear`` is used instead whatever is set with ``scale``. Bilinear
         will reproduce the source image perfectly if no scaling is performed.
-        Note that this option never affects ``cscale``.
+        Enabled by default. Note that this option never affects ``cscale``.
 
     ``pbo``
-        Enable use of PBOs. This is slightly faster, but can sometimes lead to
-        sporadic and temporary image corruption (in theory, because reupload
-        is not retried when it fails), and perhaps actually triggers slower
-        paths with drivers that don't support PBOs properly.
+        Enable use of PBOs. On some drivers this can be faster, especially if
+        the source video size is huge (e.g. so called "4K" video). On other
+        drivers it might be slower or cause latency issues.
+
+        In theory, this can sometimes lead to sporadic and temporary image
+        corruption (because reupload is not retried when it fails).
 
     ``dither-depth=<N|no|auto>``
         Set dither target depth to N. Default: no.
@@ -481,7 +483,7 @@ Available video output drivers are:
 
     ``temporal-dither``
         Enable temporal dithering. (Only active if dithering is enabled in
-        general.) This changes between 8 different dithering pattern on each
+        general.) This changes between 8 different dithering patterns on each
         frame by changing the orientation of the tiled dithering matrix.
         Unfortunately, this can lead to flicker on LCD displays, since these
         have a high reaction time.
@@ -492,7 +494,7 @@ Available video output drivers are:
         video frame, 2 on every other frame, etc.
 
     ``debug``
-        Check for OpenGL errors, i.e. call ``glGetError()``. Also request a
+        Check for OpenGL errors, i.e. call ``glGetError()``. Also, request a
         debug OpenGL context (which does nothing with current graphics drivers
         as of this writing).
 
@@ -547,6 +549,20 @@ Available video output drivers are:
         manifest themselves as short flashes or fringes of black, mostly
         around moving edges) in exchange for potentially adding more blur.
 
+    ``interpolation-threshold=<0..1,-1>``
+        Threshold below which frame ratio interpolation gets disabled (default:
+        ``0.0001``). This is calculated as ``abs(disphz/vfps - 1) < threshold``,
+        where ``vfps`` is the speed-adjusted display FPS, and ``disphz`` the
+        display refresh rate.
+
+        The default is intended to almost always enable interpolation if the
+        playback rate is even slightly different from the display refresh rate.
+        But note that if you use e.g. ``--video-sync=display-vdrop``, small
+        deviations in the rate can disable interpolation and introduce a
+        discontinuity every other minute.
+
+        Set this to ``-1`` to disable this logic.
+
     ``dscale-radius``, ``cscale-radius``, ``tscale-radius``, etc.
         Set filter parameters for ``dscale``, ``cscale`` and ``tscale``,
         respectively.
@@ -566,12 +582,10 @@ Available video output drivers are:
         better than without it) since it will extend the size to match only the
         milder of the scale factors between the axes.
 
-    ``prescale=<filter>``
-        This option provides non-convolution-based filters for upscaling. These
-        filters resize the video to multiple of the original size (all currently
-        supported prescalers can only perform image doubling in a single pass).
-        Generally another convolution based filter (the main scaler) will be
-        applied after prescaler to match the target display size.
+    ``prescale-luma=<filter>``
+        Apply additional pre-scaling (image doubling) on the luma plane
+        (if present). As the name implies, these will run before the main
+        upscaling pass.
 
         ``none``
             Disable all prescalers. This is the default.
@@ -588,10 +602,6 @@ Available video output drivers are:
 
             Extremely slow and requires a recent mid or high end graphics card
             to work smoothly (as of 2015).
-
-        Note that all the filters above are designed (or implemented) to process
-        luma plane only and probably won't work as intended for video in RGB
-        format.
 
     ``prescale-passes=<1..5>``
         The number of passes to apply the prescaler (defaults to be 1). Setting
@@ -655,7 +665,11 @@ Available video output drivers are:
 
         These files must define a function with the following signature::
 
-            vec4 sample(sampler2D tex, vec2 pos, vec2 tex_size)
+            vec4 sample_pixel(sampler2D tex, vec2 pos, vec2 tex_size)
+
+        (If there is no string ``sample_pixel`` in the shader script, it will
+        use ``sample`` instead. This is a compatibility hack for older shader
+        scripts, and is deprecated.)
 
         The meanings of the parameters are as follows:
 
@@ -741,7 +755,7 @@ Available video output drivers are:
 
     ``glfinish``
         Call ``glFinish()`` before and after swapping buffers (default: disabled).
-        Slower, but might help getting better results when doing framedropping.
+        Slower, but might improve results when doing framedropping.
         Can completely ruin performance. The details depend entirely on the
         OpenGL driver.
 
@@ -770,9 +784,9 @@ Available video output drivers are:
         The value ``auto`` will try to determine whether the compositor is
         active, and calls ``DwmFlush`` only if it seems to be.
 
-        This may help getting more consistent frame intervals, especially with
-        high-fps clips - which might also reduce dropped frames. Typically a
-        value of ``windowed`` should be enough since full screen may bypass the
+        This may help to get more consistent frame intervals, especially with
+        high-fps clips - which might also reduce dropped frames. Typically, a
+        value of ``windowed`` should be enough, since full screen may bypass the
         DWM.
 
         Windows only.
@@ -794,10 +808,11 @@ Available video output drivers are:
         angle
             Direct3D11 through the OpenGL ES translation layer ANGLE. This
             supports almost everything the ``win`` backend does, except ICC
-            profiles, high bit depth video input, and the ``nnedi3`` prescaler.
+            profiles, and the ``nnedi3`` prescaler.
         dxinterop (experimental)
             Win32, using WGL for rendering and Direct3D 9Ex for presentation.
-            Works on Nvidia and AMD only.
+            Works on Nvidia and AMD. Newer Intel chips with the latest drivers
+            may also work.
         x11
             X11/GLX
         wayland
@@ -822,8 +837,8 @@ Available video output drivers are:
         influence performance and quality of the video output.
         ``fmt`` can be one of: rgb, rgba, rgb8, rgb10, rgb10_a2, rgb16, rgb16f,
         rgb32f, rgba12, rgba16, rgba16f, rgba32f.
-        Default: ``auto``, which maps to rgba16 on desktop GL, and rgb10_a2 on
-        GLES (e.g. ANGLE).
+        Default: ``auto``, which maps to rgba16 on desktop GL, and rgba16f or
+        rgb10_a2 on GLES (e.g. ANGLE).
 
     ``gamma=<0.1..2.0>``
         Set a gamma value (default: 1.0). If gamma is adjusted in other ways
@@ -872,6 +887,8 @@ Available video output drivers are:
             ProPhoto RGB (ROMM)
         cie1931
             CIE 1931 RGB (not to be confused with CIE XYZ)
+        dci-p3
+            DCI-P3 (Digital Cinema Colorspace), SMPTE RP431-2
 
     ``target-trc=<value>``
         Specifies the transfer characteristics (gamma) of the display. Video
@@ -955,9 +972,11 @@ Available video output drivers are:
                      things like softsubbed ASS signs to match the video colors,
                      but may cause SRT subtitles or similar to look slightly off.
 
-    ``alpha=<blend|yes|no>``
-        Decides what to do if the input has an alpha component (default: blend).
+    ``alpha=<blend-tiles|blend|yes|no>``
+        Decides what to do if the input has an alpha component.
 
+        blend-tiles
+            Blend the frame against a 16x16 gray/white tiles background (default).
         blend
             Blend the frame against a black background.
         yes
@@ -984,7 +1003,7 @@ Available video output drivers are:
 
     This is equivalent to::
 
-        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:correct-downscaling:sigmoid-upscaling:pbo:deband:es=no
+        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:correct-downscaling:sigmoid-upscaling:deband:es=no
 
     Note that some cheaper LCDs do dithering that gravely interferes with
     ``opengl``'s dithering. Disabling dithering with ``dither-depth=no`` helps.

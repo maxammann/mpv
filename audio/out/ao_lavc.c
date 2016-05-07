@@ -31,7 +31,7 @@
 #include "common/common.h"
 #include "audio/format.h"
 #include "audio/fmt-conversion.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "ao.h"
 #include "internal.h"
 #include "common/msg.h"
@@ -107,6 +107,11 @@ static int init(struct ao *ao)
     }
 
     codec = encode_lavc_get_codec(ao->encode_lavc_ctx, ac->stream);
+
+    int samplerate = af_select_best_samplerate(ao->samplerate,
+                                               codec->supported_samplerates);
+    if (samplerate > 0)
+        ao->samplerate = samplerate;
 
     // TODO: Remove this redundancy with encode_lavc_alloc_stream also
     // setting the time base.

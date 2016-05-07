@@ -23,7 +23,7 @@
 #include <assert.h>
 
 #include "config.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 #include "common/msg.h"
 #include "common/msg_control.h"
@@ -39,6 +39,7 @@
 #include "stream/stream.h"
 #include "sub/osd.h"
 
+#include "video/decode/dec_video.h"
 #include "video/out/vo.h"
 
 #include "core.h"
@@ -194,9 +195,9 @@ static void print_status(struct MPContext *mpctx)
         saddf(&line, "(Paused) ");
     }
 
-    if (mpctx->d_audio)
+    if (mpctx->ao_chain)
         saddf(&line, "A");
-    if (mpctx->d_video)
+    if (mpctx->vo_chain)
         saddf(&line, "V");
     saddf(&line, ": ");
 
@@ -216,7 +217,7 @@ static void print_status(struct MPContext *mpctx)
         saddf(&line, " x%4.2f", opts->playback_speed);
 
     // A-V sync
-    if (mpctx->d_audio && mpctx->d_video && mpctx->sync_audio_to_video) {
+    if (mpctx->ao_chain && mpctx->vo_chain && !mpctx->vo_chain->is_coverart) {
         saddf(&line, " A-V:%7.3f", mpctx->last_av_difference);
         if (fabs(mpctx->total_avsync_change) > 0.05)
             saddf(&line, " ct:%7.3f", mpctx->total_avsync_change);
@@ -234,26 +235,31 @@ static void print_status(struct MPContext *mpctx)
 #endif
     {
         // VO stats
-        if (mpctx->d_video) {
+        if (mpctx->vo_chain) {
             if (mpctx->display_sync_active) {
-                char *r = mp_property_expand_string(mpctx, "${vsync-ratio}");
-                saddf(&line, " DS: %s/%"PRId64, r,
-                      vo_get_delayed_count(mpctx->video_out));
+                char *r = mp_property_expand_string(mpctx,
+                                            "${?vsync-ratio:${vsync-ratio}}");
+                if (r[0]) {
+                    saddf(&line, " DS: %s/%"PRId64, r,
+                          vo_get_delayed_count(mpctx->video_out));
+                }
                 talloc_free(r);
             }
             int64_t c = vo_get_drop_count(mpctx->video_out);
-            if (c > 0 || mpctx->dropped_frames_total > 0) {
+            struct dec_video *d_video = mpctx->vo_chain->video_src;
+            int dropped_frames = d_video ? d_video->dropped_frames : 0;
+            if (c > 0 || dropped_frames > 0) {
                 saddf(&line, " Dropped: %"PRId64, c);
-                if (mpctx->dropped_frames_total)
-                    saddf(&line, "/%d", mpctx->dropped_frames_total);
+                if (dropped_frames)
+                    saddf(&line, "/%d", dropped_frames);
             }
         }
     }
 
     if (mpctx->demuxer) {
-        int64_t fill = -1;
-        demux_stream_control(mpctx->demuxer, STREAM_CTRL_GET_CACHE_FILL, &fill);
-        if (fill >= 0) {
+        struct stream_cache_info info = {0};
+        demux_stream_control(mpctx->demuxer, STREAM_CTRL_GET_CACHE_INFO, &info);
+        if (info.size > 0) {
             saddf(&line, " Cache: ");
 
             struct demux_ctrl_reader_state s = {.ts_duration = -1};
@@ -264,10 +270,10 @@ static void print_status(struct MPContext *mpctx)
             } else {
                 saddf(&line, "%2ds", (int)s.ts_duration);
             }
-            if (fill >= 1024 * 1024) {
-                saddf(&line, "+%lldMB", (long long)(fill / 1024 / 1024));
+            if (info.fill >= 1024 * 1024) {
+                saddf(&line, "+%lldMB", (long long)(info.fill / 1024 / 1024));
             } else {
-                saddf(&line, "+%lldKB", (long long)(fill / 1024));
+                saddf(&line, "+%lldKB", (long long)(info.fill / 1024));
             }
         }
     }
@@ -461,13 +467,11 @@ static void add_seek_osd_messages(struct MPContext *mpctx)
                      "Chapter: %s", chapter);
         talloc_free(chapter);
     }
-    if ((mpctx->add_osd_seek_info & OSD_SEEK_INFO_EDITION)
-        && mpctx->master_demuxer)
-    {
+    if ((mpctx->add_osd_seek_info & OSD_SEEK_INFO_EDITION) && mpctx->demuxer) {
         set_osd_msg(mpctx, 1, mpctx->opts->osd_duration,
                      "Playing edition %d of %d.",
-                     mpctx->master_demuxer->edition + 1,
-                     mpctx->master_demuxer->num_editions);
+                     mpctx->demuxer->edition + 1,
+                     mpctx->demuxer->num_editions);
     }
     if (mpctx->add_osd_seek_info & OSD_SEEK_INFO_CURRENT_FILE) {
         if (mpctx->filename) {
@@ -557,6 +561,6 @@ void update_osd_msg(struct MPContext *mpctx)
         text = talloc_asprintf_append(text, "%s%s", text ? "\n" : "",
                                       mpctx->osd_msg_text);
     }
-    osd_set_text(osd, OSDTYPE_OSD, text);
+    osd_set_text(osd, text);
     talloc_free(text);
 }
